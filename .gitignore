@@ -1,0 +1,10 @@
+.DS_Store
+.build/
+.codex-tmp/
+.cache/
+DerivedData/
+build/
+*.profraw
+*.xcuserdatad/
+*.xcuserdata/
+*.xcuserstate
