@@ -78,6 +78,27 @@ This writes the following files to `build/release/`:
 The repository also includes a distribution page at [`docs/index.html`](./docs/index.html).
 If GitHub Pages is enabled from the `docs/` folder on `main`, that page can be used as the public download page and points to GitHub Releases `latest` assets.
 
+## Download
+
+- Download page: https://ksmkzs.github.io/clipboard/
+- Latest release: https://github.com/ksmkzs/clipboard/releases/latest
+
+Available release artifacts:
+
+- `ClipboardHistory-mac-universal.zip`
+- `ClipboardHistory-mac-apple-silicon.zip`
+- `ClipboardHistory-mac-intel.zip`
+- `SHA256SUMS.txt`
+
+## Install
+
+1. Download the build that matches your Mac.
+2. Unzip `ClipboardHistory.app`.
+3. Move it to `/Applications`.
+4. Launch the app once.
+5. If macOS prompts for permission, grant Accessibility access.
+6. Open Settings to configure shortcuts and launch at login.
+
 ## Tests
 
 The project now includes editor keyboard tests under [`ClipboardHistoryTests`](./ClipboardHistoryTests).
@@ -97,6 +118,49 @@ UI-level manual verification is still required for:
 - launch at login after logout / login
 - final panel behavior across multiple Macs and macOS versions
 - packaging and signed distribution behavior
+
+## Permissions
+
+ClipboardHistory may require:
+
+- Accessibility permission, for panel hotkeys and paste-back into the previously active app
+- normal clipboard access as part of clipboard history monitoring
+
+## Known Limitations
+
+- Runtime verification is strongest on Intel macOS so far; Apple Silicon build compatibility is verified from universal and thin release artifacts.
+- Launch at login is implemented and registered through macOS login items, but practical behavior depends on running the packaged app from `/Applications`.
+- Some behavior depends on macOS Accessibility APIs and may vary by the currently focused app.
+
+## Release Notes Template
+
+```md
+## ClipboardHistory v0.1.0
+
+First public release of ClipboardHistory, a local-first macOS menu bar clipboard history app.
+
+### Included
+- text and image clipboard history
+- pinned items with manual ordering
+- text editor mode for long text items
+- copy-back and paste-back into the previously active app
+- configurable shortcuts
+- launch at login
+- experimental translation shortcut
+
+### Downloads
+- Universal: `ClipboardHistory-mac-universal.zip`
+- Apple Silicon: `ClipboardHistory-mac-apple-silicon.zip`
+- Intel: `ClipboardHistory-mac-intel.zip`
+
+### Requirements
+- macOS 14 or later
+
+### Notes
+- Move `ClipboardHistory.app` into `/Applications` before enabling `Launch at login`.
+- You may need to grant Accessibility permission for full paste-back behavior.
+- Checksums are included in `SHA256SUMS.txt`.
+```
 
 ## Repository Layout
 
