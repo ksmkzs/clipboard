@@ -1,5 +1,7 @@
 # Quality Plan
 
+[日本語版](./quality-plan.ja.md)
+
 This document defines the initial OSS hardening plan for ClipboardHistory.
 
 ## 1. Compatibility

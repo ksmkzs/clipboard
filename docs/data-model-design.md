@@ -1,5 +1,7 @@
 # Data Model Design
 
+[日本語版](./data-model-design.ja.md)
+
 This document captures the next implementation decisions for ClipboardHistory before UI and tests are added.
 
 ## 1. Immediate Decisions

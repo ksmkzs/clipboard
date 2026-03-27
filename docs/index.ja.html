@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ja">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -16,9 +16,7 @@
         --accent-soft: #eef5fa;
       }
 
-      * {
-        box-sizing: border-box;
-      }
+      * { box-sizing: border-box; }
 
       body {
         margin: 0;
@@ -57,10 +55,7 @@
         margin-bottom: 12px;
       }
 
-      p {
-        margin: 0;
-        line-height: 1.55;
-      }
+      p { margin: 0; line-height: 1.55; }
 
       .hero {
         display: grid;
@@ -161,69 +156,68 @@
   <body>
     <main>
       <section class="hero">
-        <div class="eyebrow"><a href="./index.ja.html">日本語</a></div>
+        <div class="eyebrow"><a href="./index.html">English</a></div>
         <div class="eyebrow">ClipboardHistory for macOS</div>
-        <h1>Fast local clipboard history, built for the menu bar.</h1>
+        <h1>メニューバーから使える、ローカル完結の clipboard history。</h1>
         <p class="lede">
-          ClipboardHistory keeps recent text and image snippets available from a compact
-          floating panel, with pinning, editing, paste-back, and local-only storage.
+          ClipboardHistory は、最近コピーしたテキストや画像を、コンパクトなフローティングパネルから
+          すばやく呼び戻せる macOS アプリです。pin、編集、再コピー、paste-back に対応します。
         </p>
       </section>
 
       <section class="download-grid">
         <article class="download-card">
           <strong>Universal</strong>
-          <p>Recommended for most people. Works on Apple Silicon and Intel Macs.</p>
-          <a href="https://github.com/ksmkzs/clipboard/releases/latest/download/ClipboardHistory-mac-universal.zip">Download Universal</a>
+          <p>通常はこちらを推奨します。Apple Silicon / Intel の両方で動きます。</p>
+          <a href="https://github.com/ksmkzs/clipboard/releases/latest/download/ClipboardHistory-mac-universal.zip">Universal をダウンロード</a>
         </article>
         <article class="download-card">
           <strong>Apple Silicon</strong>
-          <p>Thin build for M1, M2, M3, and newer Apple Silicon Macs.</p>
-          <a class="secondary" href="https://github.com/ksmkzs/clipboard/releases/latest/download/ClipboardHistory-mac-apple-silicon.zip">Download Apple Silicon</a>
+          <p>M1、M2、M3 以降の Apple Silicon 向け thin build です。</p>
+          <a class="secondary" href="https://github.com/ksmkzs/clipboard/releases/latest/download/ClipboardHistory-mac-apple-silicon.zip">Apple Silicon をダウンロード</a>
         </article>
         <article class="download-card">
           <strong>Intel</strong>
-          <p>Thin build for Intel Macs. Use this only if you need an Intel-only bundle.</p>
-          <a class="secondary" href="https://github.com/ksmkzs/clipboard/releases/latest/download/ClipboardHistory-mac-intel.zip">Download Intel</a>
+          <p>Intel Mac 向け thin build です。Intel 専用が必要な場合のみ使ってください。</p>
+          <a class="secondary" href="https://github.com/ksmkzs/clipboard/releases/latest/download/ClipboardHistory-mac-intel.zip">Intel をダウンロード</a>
         </article>
       </section>
 
       <section class="sections">
         <article class="info-card">
-          <h2>Install</h2>
+          <h2>インストール</h2>
           <ul>
-            <li>Download the build that matches your Mac.</li>
-            <li>Unzip and move <code>ClipboardHistory.app</code> into <code>/Applications</code>.</li>
-            <li>Launch once, then grant Accessibility permission if prompted.</li>
-            <li>Use the settings window to configure shortcuts and launch at login.</li>
-            <li>Enable Launch at Login only after the app is installed in <code>/Applications</code>.</li>
+            <li>使っている Mac に合う build をダウンロードします。</li>
+            <li><code>ClipboardHistory.app</code> を展開して <code>/Applications</code> に移動します。</li>
+            <li>一度起動し、必要なら Accessibility 権限を許可します。</li>
+            <li>ショートカットや launch at login は Settings から変更できます。</li>
+            <li><code>/Applications</code> に入れてから Launch at Login を有効にしてください。</li>
           </ul>
         </article>
         <article class="info-card">
-          <h2>Compatibility</h2>
+          <h2>対応範囲</h2>
           <ul>
-            <li>macOS 14 or later</li>
-            <li>Text and image clipboard history</li>
-            <li>Apple Silicon and Intel release artifacts</li>
-            <li>Local-only workflow, no sync or account setup</li>
+            <li>macOS 14 以降</li>
+            <li>テキストと画像の clipboard history</li>
+            <li>Apple Silicon / Intel 向け release artifact</li>
+            <li>ローカル完結。アカウントや sync はありません。</li>
           </ul>
         </article>
         <article class="info-card">
           <h2>Project</h2>
           <p>
-            Source, issues, and release notes live on
-            <a href="https://github.com/ksmkzs/clipboard">GitHub</a>.
-            The latest checksums are published in each release as <code>SHA256SUMS.txt</code>.
+            source、issue、release note は
+            <a href="https://github.com/ksmkzs/clipboard">GitHub</a>
+            にあります。checksum は各 release の <code>SHA256SUMS.txt</code> に含まれます。
           </p>
         </article>
       </section>
 
       <p class="footer">
-        Tip: the Universal build is the default recommendation. Use the thin builds only when
-        you specifically want a smaller architecture-specific bundle.
+        特に理由がなければ Universal build を使ってください。thin build は architecture 固定が必要な場合向けです。
       </p>
       <p class="footer">
-        Accessibility permission may be required for panel hotkeys and paste-back behavior.
+        panel hotkey と paste-back のために Accessibility permission が必要になることがあります。
       </p>
     </main>
   </body>

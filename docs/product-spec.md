@@ -1,5 +1,7 @@
 # Product Specification
 
+[日本語版](./product-spec.ja.md)
+
 This document defines the proposed MVP specification for ClipboardHistory as a public macOS open-source application.
 
 ## 1. Product Summary

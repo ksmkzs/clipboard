@@ -1,5 +1,7 @@
 # UI Specification
 
+[日本語版](./ui-spec.ja.md)
+
 This document defines the intended user interface for the first public ClipboardHistory release before SwiftUI implementation changes are made.
 
 ## 1. UI Principles

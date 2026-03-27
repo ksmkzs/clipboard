@@ -1,5 +1,7 @@
 # ClipboardHistory
 
+[日本語版 README](./README.ja.md)
+
 ClipboardHistory is a macOS menu bar app that keeps recent clipboard history for text and images and lets you reopen, pin, edit, copy, and paste older items from a compact floating panel.
 
 ## Features
@@ -132,44 +134,6 @@ ClipboardHistory may require:
 - Launch at login is implemented and registered through macOS login items, but practical behavior depends on running the packaged app from `/Applications`.
 - Some behavior depends on macOS Accessibility APIs and may vary by the currently focused app.
 
-## Release Notes Template
-
-```md
-## ClipboardHistory v0.1.0
-
-ClipboardHistory is a local-first macOS menu bar app for recalling recent text and image clipboard items from a compact floating panel.
-
-### Highlights
-- recent text and image clipboard history
-- pinned items with manual ordering
-- text editor mode for long text items
-- copy-back and paste-back into the previously active app
-- configurable shortcuts and launch at login
-- experimental translation shortcut
-
-### Downloads
-- Universal: `ClipboardHistory-mac-universal.zip`
-- Apple Silicon: `ClipboardHistory-mac-apple-silicon.zip`
-- Intel: `ClipboardHistory-mac-intel.zip`
-- Checksums: `SHA256SUMS.txt`
-
-### Requirements
-- macOS 14 or later
-
-### Install
-1. Download the build that matches your Mac.
-2. Unzip `ClipboardHistory.app`.
-3. Move it to `/Applications`.
-4. Launch it once.
-5. Grant Accessibility permission if macOS prompts for it.
-
-### Notes
-- Use the Universal build unless you specifically want an architecture-specific download.
-- Move `ClipboardHistory.app` into `/Applications` before enabling `Launch at Login`.
-- Accessibility permission may be required for panel hotkeys and paste-back behavior.
-- Translation is experimental and opens Google Translate in your browser.
-```
-
 ## Repository Layout
 
 - `App/`: app lifecycle, settings state, and app delegate
@@ -178,6 +142,15 @@ ClipboardHistory is a local-first macOS menu bar app for recalling recent text a
 - `Views/`: panel UI, editor UI, and AppKit bridges
 - `ClipboardHistoryTests/`: focused keyboard and editing tests
 - `docs/`: product, UI, and quality notes
+
+## Documentation
+
+- [Japanese README](./README.ja.md)
+- [Japanese distribution page](./docs/index.ja.html)
+- [Japanese product specification](./docs/product-spec.ja.md)
+- [Japanese UI specification](./docs/ui-spec.ja.md)
+- [Japanese quality plan](./docs/quality-plan.ja.md)
+- [Japanese data model design](./docs/data-model-design.ja.md)
 
 ## License
 
