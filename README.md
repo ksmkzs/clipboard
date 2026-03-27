@@ -60,6 +60,24 @@ Editor mode adds:
 xcodebuild -project ClipboardHistory.xcodeproj -scheme ClipboardHistory -configuration Debug CODE_SIGNING_ALLOWED=NO build
 ```
 
+## Distribution
+
+To build signed release artifacts for distribution:
+
+```sh
+./scripts/package_release.sh
+```
+
+This writes the following files to `build/release/`:
+
+- `ClipboardHistory-mac-universal.zip`
+- `ClipboardHistory-mac-apple-silicon.zip`
+- `ClipboardHistory-mac-intel.zip`
+- `SHA256SUMS.txt`
+
+The repository also includes a distribution page at [`docs/index.html`](./docs/index.html).
+If GitHub Pages is enabled from the `docs/` folder on `main`, that page can be used as the public download page and points to GitHub Releases `latest` assets.
+
 ## Tests
 
 The project now includes editor keyboard tests under [`ClipboardHistoryTests`](./ClipboardHistoryTests).
