@@ -137,29 +137,37 @@ ClipboardHistory may require:
 ```md
 ## ClipboardHistory v0.1.0
 
-First public release of ClipboardHistory, a local-first macOS menu bar clipboard history app.
+ClipboardHistory is a local-first macOS menu bar app for recalling recent text and image clipboard items from a compact floating panel.
 
-### Included
-- text and image clipboard history
+### Highlights
+- recent text and image clipboard history
 - pinned items with manual ordering
 - text editor mode for long text items
 - copy-back and paste-back into the previously active app
-- configurable shortcuts
-- launch at login
+- configurable shortcuts and launch at login
 - experimental translation shortcut
 
 ### Downloads
 - Universal: `ClipboardHistory-mac-universal.zip`
 - Apple Silicon: `ClipboardHistory-mac-apple-silicon.zip`
 - Intel: `ClipboardHistory-mac-intel.zip`
+- Checksums: `SHA256SUMS.txt`
 
 ### Requirements
 - macOS 14 or later
 
+### Install
+1. Download the build that matches your Mac.
+2. Unzip `ClipboardHistory.app`.
+3. Move it to `/Applications`.
+4. Launch it once.
+5. Grant Accessibility permission if macOS prompts for it.
+
 ### Notes
-- Move `ClipboardHistory.app` into `/Applications` before enabling `Launch at login`.
-- You may need to grant Accessibility permission for full paste-back behavior.
-- Checksums are included in `SHA256SUMS.txt`.
+- Use the Universal build unless you specifically want an architecture-specific download.
+- Move `ClipboardHistory.app` into `/Applications` before enabling `Launch at Login`.
+- Accessibility permission may be required for panel hotkeys and paste-back behavior.
+- Translation is experimental and opens Google Translate in your browser.
 ```
 
 ## Repository Layout
