@@ -2,83 +2,85 @@
 
 [日本語版 README](./README.ja.md)
 
-ClipboardHistory is a macOS menu bar app that keeps recent clipboard history for text and images and lets you reopen, pin, edit, copy, and paste older items from a compact floating panel.
+ClipboardHistory is a keyboard-first macOS clipboard app for people who constantly reuse copied text, code, prompts, commands, and images.
+
+Instead of treating your clipboard like a single slot, it gives you a compact floating panel with recent history, a pinned working set, and an editor mode for cleaning up pasted text before you send it back into the app you were using.
+
+## Why It Exists
+
+Most clipboard tools are good at storing snippets and bad at helping you actually reuse them.
+
+ClipboardHistory is built around the moments that usually create friction:
+
+- you copied something useful twenty minutes ago and need it again now
+- you want a small pinned set of snippets that stays close at hand
+- you need to clean up copied text without opening another editor
+- you want to paste back into the previous app immediately, without breaking flow
+
+## What Makes It Different
+
+- `Pinned workspace`
+  Keep a small manually ordered set of always-available items beside normal history.
+- `Editor mode`
+  Open text items in-place, edit them, undo or redo changes, indent or outdent blocks, move lines, join lines, or normalize text for command use.
+- `Paste-back workflow`
+  Choose an item and send it back into the previously active app from the panel.
+- `Text and image history`
+  Store both kinds of clipboard content in one compact menu bar utility.
+- `Local-first by default`
+  No accounts, no sync, no remote dependency, no cloud service layer.
+
+## Core Workflow
+
+1. Copy text or an image as usual.
+2. Open the panel with `⌘⇧V`.
+3. Browse history, pin useful items, or open a text item in editor mode.
+4. Press `Return` to paste the selected item back into the app you were just using.
 
 ## Features
 
-- text and image clipboard history
+### History and Reuse
+
+- recent clipboard history for text and images
 - pinned items with manual ordering
-- text-item editing mode with keyboard editing commands
-- copy-back and paste-back into the previously active app
-- configurable shortcuts and launch-at-login setting
+- quick copy-back and paste-back
+- undo and redo for delete, pin, reorder, join, and normalize actions
+
+### Text Editing
+
+- in-panel text editor mode for text items
+- native macOS text editing behavior
+- indent / outdent
+- move line up / down
+- join lines
+- normalize text for command use
+- configurable editor shortcuts
+
+### App Behavior
+
+- configurable global and in-app shortcuts
+- launch at login
 - experimental Google Translate shortcut with configurable target language
-
-## Scope
-
-ClipboardHistory is intentionally local-first.
-
-- no account setup
-- no cloud sync
-- no cross-device clipboard sync
-- no remote service dependency
-
-## Compatibility
-
-Current target:
-
-- macOS 14+
-- Apple Silicon and Intel build targets
-
-Current verification status:
-
-- repository build verified from terminal
-- editor keyboard command harness verified
-- runtime behavior repeatedly exercised on an Intel macOS environment
-- Intel and Apple Silicon are targeted by build settings, but multi-machine runtime verification is still pending before public release
 
 ## Keyboard Highlights
 
-Default shortcuts:
+### Default panel shortcuts
 
-- panel toggle: `⌘⇧V`
+- open panel: `⌘⇧V`
 - translation: `⌘⇧T`
 - copy selected item: `⌘C`
 - paste selected item: `Return`
 - delete selected item: `Delete`
 - toggle pinned pane: `Tab`
 
-Editor mode adds:
+### Default editor shortcuts
 
 - save: `⌘↩`
 - cancel: `Esc`
 - indent / outdent: `Tab` / `⇧Tab`
 - move line up / down: `⌥↑` / `⌥↓`
 - join lines: `⌘J`
-- normalize for command: `⌘⇧J`
-
-## Build
-
-```sh
-xcodebuild -project ClipboardHistory.xcodeproj -scheme ClipboardHistory -configuration Debug CODE_SIGNING_ALLOWED=NO build
-```
-
-## Distribution
-
-To build signed release artifacts for distribution:
-
-```sh
-./scripts/package_release.sh
-```
-
-This writes the following files to `build/release/`:
-
-- `ClipboardHistory-mac-universal.zip`
-- `ClipboardHistory-mac-apple-silicon.zip`
-- `ClipboardHistory-mac-intel.zip`
-- `SHA256SUMS.txt`
-
-The repository also includes a distribution page at [`docs/index.html`](./docs/index.html).
-If GitHub Pages is enabled from the `docs/` folder on `main`, that page can be used as the public download page and points to GitHub Releases `latest` assets.
+- normalize for command use: `⌘⇧J`
 
 ## Download
 
@@ -97,49 +99,66 @@ Available release artifacts:
 1. Download the build that matches your Mac.
 2. Unzip `ClipboardHistory.app`.
 3. Move it to `/Applications`.
-4. Launch the app once.
-5. If macOS prompts for permission, grant Accessibility access.
-6. Open Settings to configure shortcuts and launch at login.
+4. Launch it once.
+5. Grant Accessibility permission if macOS asks for it.
+6. Open Settings to tune shortcuts and launch at login.
 
-## Tests
+## Compatibility
 
-The project now includes editor keyboard tests under [`ClipboardHistoryTests`](./ClipboardHistoryTests).
-
-Current automated verification covers:
-
-- editor keyboard command handling
-- editor-specific undo / redo routing
-- non-text persistence undo / redo logic
-- `Enter` paste smoke test against a real TextEdit window:
-  `ClipboardHistoryTests/enter_paste_smoke.sh 5`
-- paste target switch smoke test across TextEdit and Script Editor:
-  `ClipboardHistoryTests/enter_paste_target_switch_smoke.sh`
-
-UI-level manual verification is still required for:
-
-- launch at login after logout / login
-- final panel behavior across multiple Macs and macOS versions
-- packaging and signed distribution behavior
+- macOS 14 or later
+- Apple Silicon and Intel release targets
+- built for local desktop use, not sync-heavy cross-device workflows
 
 ## Permissions
 
 ClipboardHistory may require:
 
-- Accessibility permission, for panel hotkeys and paste-back into the previously active app
+- Accessibility permission for global hotkeys and paste-back behavior
 - normal clipboard access as part of clipboard history monitoring
 
-## Known Limitations
+## Development
 
-- Runtime verification is strongest on Intel macOS so far; Apple Silicon build compatibility is verified from universal and thin release artifacts.
-- Launch at login is implemented and registered through macOS login items, but practical behavior depends on running the packaged app from `/Applications`.
-- Some behavior depends on macOS Accessibility APIs and may vary by the currently focused app.
+Build from the repository:
+
+```sh
+xcodebuild -project ClipboardHistory.xcodeproj -scheme ClipboardHistory -configuration Debug CODE_SIGNING_ALLOWED=NO build
+```
+
+Build signed release artifacts:
+
+```sh
+./scripts/package_release.sh
+```
+
+This writes the following files to `build/release/`:
+
+- `ClipboardHistory-mac-universal.zip`
+- `ClipboardHistory-mac-apple-silicon.zip`
+- `ClipboardHistory-mac-intel.zip`
+- `SHA256SUMS.txt`
+
+## Verification
+
+Automated verification currently covers:
+
+- editor keyboard command handling
+- editor-specific undo / redo routing
+- non-text persistence undo / redo logic
+- `Enter` paste smoke test against a real TextEdit window
+- paste-target switching smoke test across TextEdit and Script Editor
+
+Still worth checking manually on your own machine:
+
+- launch at login after logout / login
+- final panel behavior across multiple Macs and macOS versions
+- packaged distribution behavior after unzip and first launch
 
 ## Repository Layout
 
-- `App/`: app lifecycle, settings state, and app delegate
-- `Managers/`: clipboard capture, persistence, paste, and hotkeys
+- `App/`: app lifecycle, settings state, app delegate
+- `Managers/`: clipboard capture, persistence, paste, hotkeys
 - `Models/`: SwiftData models
-- `Views/`: panel UI, editor UI, and AppKit bridges
+- `Views/`: panel UI, editor UI, AppKit bridges
 - `ClipboardHistoryTests/`: focused keyboard and editing tests
 - `docs/`: product, UI, and quality notes
 

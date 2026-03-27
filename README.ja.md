@@ -2,52 +2,78 @@
 
 [English README](./README.md)
 
-ClipboardHistory は、最近コピーしたテキストや画像を記録し、コンパクトなフローティングパネルから再表示、ピン留め、編集、再コピー、貼り付けできる macOS のメニューバーアプリです。
+ClipboardHistory は、コード、プロンプト、シェルコマンド、文章、画像を何度も使い回す人のための、キーボード中心の macOS クリップボードアプリです。
+
+クリップボードを「いま入っている 1 件だけ」ではなく、すぐ呼び戻せる履歴、手元に固定できる pinned、貼り付け前に整えられる editor mode を持つ作業面として扱います。
+
+## 何がうれしいか
+
+一般的な clipboard manager は「保存する」ところまではできても、「再利用する」場面の気持ちよさが弱いことが多いです。
+
+ClipboardHistory は、次のような場面を楽にするために作っています。
+
+- 20 分前にコピーした有用な断片をもう一度使いたい
+- 毎日使う数個の snippet だけは常に見える場所へ置いておきたい
+- コピーした文章やコマンドを、別のエディタを開かず少しだけ整えたい
+- いま使っているアプリへ、そのまま戻して貼り付けたい
+
+## 独自性
+
+- `Pinned workspace`
+  通常履歴とは別に、よく使う項目を手動順序付きで保持できます。
+- `Editor mode`
+  テキスト項目をその場で開き、undo / redo、indent / outdent、行移動、join、normalize まで行えます。
+- `Paste-back workflow`
+  panel から選んだ項目を、その直前に使っていたアプリへ戻して貼り付けられます。
+- `Text + image history`
+  テキストと画像を同じ panel で扱えます。
+- `Local-first`
+  アカウント不要、同期不要、クラウド不要です。
+
+## 基本の使い方
+
+1. いつも通りテキストや画像をコピーします。
+2. `⌘⇧V` で panel を開きます。
+3. 履歴を選ぶ、pin する、必要なら editor mode で整えます。
+4. `Return` で、その項目を直前のアプリへ貼り戻します。
 
 ## 主な機能
 
-- テキストと画像のクリップボード履歴
-- 手動並び替えに対応した pinned 項目
-- キーボード編集コマンド付きのテキスト編集モード
-- 直前に使っていたアプリへの copy-back / paste-back
-- 変更可能なショートカットとログイン時起動
-- 翻訳先言語を設定できる実験的な Google Translate ショートカット
+### 履歴と再利用
 
-## スコープ
+- テキストと画像の clipboard history
+- 手動並び替え対応の pinned 項目
+- 再コピーと paste-back
+- delete / pin / reorder / join / normalize に対する undo / redo
 
-ClipboardHistory はローカルファーストです。
+### テキスト編集
 
-- アカウント作成なし
-- クラウド同期なし
-- 他デバイスとのクリップボード同期なし
-- リモートサービス依存なし
+- テキスト項目専用の editor mode
+- macOS らしい標準的なテキスト編集挙動
+- indent / outdent
+- 行の上下移動
+- 行の結合
+- コマンド用 normalize
+- 編集系ショートカットのカスタマイズ
 
-## 対応環境
+### アプリ動作
 
-現在の対象:
+- グローバル shortcut と in-app shortcut の設定
+- Launch at Login
+- 翻訳先言語を設定できる experimental Google Translate shortcut
 
-- macOS 14 以降
-- Apple Silicon / Intel 両対応
+## キーボードの要点
 
-現在の確認状況:
+### 通常 panel
 
-- terminal からの repository build を確認済み
-- editor keyboard command harness を確認済み
-- Intel macOS 環境で runtime behavior を繰り返し確認済み
-- Intel / Apple Silicon 向けの build 設定と release artifact は確認済みだが、複数マシンでの runtime 検証は公開前にさらに行う余地があります
-
-## キーボード概要
-
-デフォルトショートカット:
-
-- パネル表示: `⌘⇧V`
+- panel を開く: `⌘⇧V`
 - 翻訳: `⌘⇧T`
-- 選択項目の再コピー: `⌘C`
-- 選択項目の貼り付け: `Return`
-- 選択項目の削除: `Delete`
+- 選択項目を再コピー: `⌘C`
+- 選択項目を貼り付け: `Return`
+- 選択項目を削除: `Delete`
 - pinned pane の開閉: `Tab`
 
-編集モードで追加:
+### editor mode
 
 - 保存: `⌘↩`
 - キャンセル: `Esc`
@@ -55,29 +81,6 @@ ClipboardHistory はローカルファーストです。
 - 行の上下移動: `⌥↑` / `⌥↓`
 - 行の結合: `⌘J`
 - コマンド用 normalize: `⌘⇧J`
-
-## Build
-
-```sh
-xcodebuild -project ClipboardHistory.xcodeproj -scheme ClipboardHistory -configuration Debug CODE_SIGNING_ALLOWED=NO build
-```
-
-## 配布物の作成
-
-署名済みの release artifact を作るには:
-
-```sh
-./scripts/package_release.sh
-```
-
-生成されるファイル:
-
-- `ClipboardHistory-mac-universal.zip`
-- `ClipboardHistory-mac-apple-silicon.zip`
-- `ClipboardHistory-mac-intel.zip`
-- `SHA256SUMS.txt`
-
-配布ページは [`docs/index.ja.html`](./docs/index.ja.html) にあります。GitHub Pages を `main` ブランチの `docs/` から有効にすると、そのまま公開ページとして使えます。
 
 ## ダウンロード
 
@@ -96,11 +99,45 @@ xcodebuild -project ClipboardHistory.xcodeproj -scheme ClipboardHistory -configu
 1. 自分の Mac に合う build をダウンロードします。
 2. `ClipboardHistory.app` を展開します。
 3. `/Applications` に移動します。
-4. 一度アプリを起動します。
-5. macOS から求められた場合は Accessibility 権限を許可します。
-6. Settings を開き、ショートカットやログイン時起動を調整します。
+4. 一度起動します。
+5. macOS に求められた場合は Accessibility 権限を許可します。
+6. Settings で shortcut や Launch at Login を調整します。
 
-## テスト
+## 対応環境
+
+- macOS 14 以降
+- Apple Silicon / Intel 向け release target
+- ローカル利用を前提とした設計で、同期前提の cross-device workflow には寄せていません
+
+## 権限
+
+ClipboardHistory では次の権限が必要になることがあります。
+
+- global hotkey と paste-back のための Accessibility 権限
+- クリップボード履歴監視に伴う通常の clipboard access
+
+## 開発
+
+repository から build:
+
+```sh
+xcodebuild -project ClipboardHistory.xcodeproj -scheme ClipboardHistory -configuration Debug CODE_SIGNING_ALLOWED=NO build
+```
+
+配布用 release artifact を build:
+
+```sh
+./scripts/package_release.sh
+```
+
+生成されるファイル:
+
+- `ClipboardHistory-mac-universal.zip`
+- `ClipboardHistory-mac-apple-silicon.zip`
+- `ClipboardHistory-mac-intel.zip`
+- `SHA256SUMS.txt`
+
+## 検証
 
 現在の自動検証対象:
 
@@ -108,26 +145,13 @@ xcodebuild -project ClipboardHistory.xcodeproj -scheme ClipboardHistory -configu
 - editor 専用 undo / redo routing
 - 非テキスト項目の persistence undo / redo logic
 - 実際の TextEdit ウィンドウに対する `Enter` paste smoke test
-- TextEdit と Script Editor を切り替えた paste target switch smoke test
+- TextEdit と Script Editor を切り替えた paste-target switching smoke test
 
-なお、以下は依然として UI レベルの手動確認が必要です。
+手元の Mac で追加確認したほうがよい項目:
 
-- logout / login をまたぐ launch at login
-- 複数の Mac / macOS バージョンでの最終動作
-- 配布された署名済み build の挙動
-
-## 権限
-
-ClipboardHistory では次の権限が必要になることがあります。
-
-- パネル用 hotkey と paste-back のための Accessibility 権限
-- 通常のクリップボード監視に伴う clipboard access
-
-## 既知の制約
-
-- 現在の runtime 検証は Intel macOS 上が最も厚く、Apple Silicon については universal / thin release artifact を確認済みです。
-- Launch at login は実装・登録済みですが、実用上は `/Applications` から起動する packaged app を前提にします。
-- 一部の動作は macOS の Accessibility API に依存し、前面アプリによって差が出ることがあります。
+- logout / login をまたぐ Launch at Login
+- 複数の Mac / macOS バージョンでの最終挙動
+- zip 展開後の packaged build の初回起動
 
 ## Repository 構成
 

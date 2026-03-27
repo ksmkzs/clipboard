@@ -7,109 +7,183 @@
     <style>
       :root {
         color-scheme: light;
-        --bg: #f5f3ef;
-        --panel: rgba(255, 252, 246, 0.92);
-        --line: #d8d0c4;
+        --bg: #f5f1eb;
+        --panel: rgba(255, 251, 245, 0.94);
+        --line: #ddd2c3;
         --text: #2d2b28;
-        --muted: #71695f;
-        --accent: #1f6b9b;
-        --accent-soft: #eef5fa;
+        --muted: #6d665d;
+        --accent: #165f8c;
+        --accent-2: #9f7d31;
+        --accent-soft: #ecf5fb;
       }
 
-      * {
-        box-sizing: border-box;
-      }
+      * { box-sizing: border-box; }
 
       body {
         margin: 0;
         font-family: "SF Pro Text", "Helvetica Neue", sans-serif;
         color: var(--text);
         background:
-          radial-gradient(circle at top left, rgba(31, 107, 155, 0.12), transparent 28%),
-          radial-gradient(circle at bottom right, rgba(201, 176, 96, 0.14), transparent 26%),
+          radial-gradient(circle at top left, rgba(22, 95, 140, 0.12), transparent 28%),
+          radial-gradient(circle at bottom right, rgba(159, 125, 49, 0.14), transparent 24%),
           var(--bg);
       }
 
       main {
-        width: min(980px, calc(100vw - 32px));
-        margin: 32px auto 56px;
+        width: min(1080px, calc(100vw - 32px));
+        margin: 28px auto 56px;
         padding: 28px;
         border: 1px solid var(--line);
-        border-radius: 28px;
+        border-radius: 30px;
         background: var(--panel);
-        box-shadow: 0 28px 80px rgba(42, 35, 28, 0.09);
+        box-shadow: 0 28px 90px rgba(42, 35, 28, 0.09);
         backdrop-filter: blur(14px);
       }
 
-      h1, h2 {
+      h1, h2, h3 {
         margin: 0;
-        font-weight: 700;
         letter-spacing: -0.03em;
       }
 
       h1 {
-        font-size: clamp(2.4rem, 7vw, 4rem);
-        line-height: 0.95;
+        font-size: clamp(2.6rem, 7vw, 4.5rem);
+        line-height: 0.92;
       }
 
       h2 {
-        font-size: 1.15rem;
+        font-size: 1.2rem;
         margin-bottom: 12px;
+      }
+
+      h3 {
+        font-size: 1rem;
+        margin-bottom: 8px;
       }
 
       p {
         margin: 0;
-        line-height: 1.55;
+        line-height: 1.6;
+      }
+
+      a {
+        color: var(--accent);
       }
 
       .hero {
         display: grid;
+        grid-template-columns: 1.2fr 0.8fr;
         gap: 18px;
-        margin-bottom: 30px;
+        align-items: stretch;
+        margin-bottom: 22px;
+      }
+
+      .hero-copy,
+      .hero-side,
+      .download-card,
+      .feature-card,
+      .info-card {
+        border: 1px solid var(--line);
+        border-radius: 24px;
+        background: rgba(255, 255, 255, 0.72);
+      }
+
+      .hero-copy {
+        padding: 24px;
+        display: grid;
+        gap: 16px;
+      }
+
+      .hero-side {
+        padding: 20px;
+        display: grid;
+        gap: 14px;
+        align-content: start;
       }
 
       .eyebrow {
-        font-size: 0.85rem;
+        font-size: 0.82rem;
         text-transform: uppercase;
         letter-spacing: 0.16em;
         color: var(--muted);
       }
 
       .lede {
-        max-width: 720px;
-        font-size: 1.04rem;
+        font-size: 1.06rem;
+        color: var(--muted);
+        max-width: 760px;
+      }
+
+      .tag-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .tag {
+        padding: 7px 11px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.76);
+        font-size: 0.9rem;
         color: var(--muted);
       }
 
-      .download-grid {
+      .hero-side ul,
+      .info-card ul {
+        margin: 0;
+        padding-left: 18px;
+        color: var(--muted);
+      }
+
+      .hero-side li,
+      .info-card li {
+        margin: 6px 0;
+      }
+
+      .section {
+        margin-top: 18px;
+      }
+
+      .download-grid,
+      .feature-grid,
+      .info-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
         gap: 14px;
-        margin: 26px 0 34px;
+      }
+
+      .download-grid {
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      }
+
+      .feature-grid {
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      }
+
+      .info-grid {
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
       }
 
       .download-card,
+      .feature-card,
       .info-card {
-        border: 1px solid var(--line);
-        border-radius: 22px;
         padding: 18px;
-        background: rgba(255, 255, 255, 0.68);
       }
 
-      .download-card strong {
+      .download-card strong,
+      .feature-card strong {
         display: block;
-        margin-bottom: 6px;
+        margin-bottom: 8px;
         font-size: 1rem;
       }
 
       .download-card p,
-      .info-card p,
-      .info-card li {
+      .feature-card p,
+      .info-card p {
         color: var(--muted);
         font-size: 0.95rem;
       }
 
-      .download-card a {
+      .download-card a.button {
         display: inline-flex;
         align-items: center;
         justify-content: center;
@@ -128,19 +202,13 @@
         color: var(--accent);
       }
 
-      .sections {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-        gap: 14px;
-      }
-
-      ul {
-        margin: 0;
-        padding-left: 18px;
+      .accent-line {
+        color: var(--accent-2);
+        font-weight: 600;
       }
 
       .footer {
-        margin-top: 22px;
+        margin-top: 24px;
         font-size: 0.92rem;
         color: var(--muted);
       }
@@ -148,6 +216,12 @@
       code {
         font-family: "SF Mono", Menlo, monospace;
         font-size: 0.9em;
+      }
+
+      @media (max-width: 860px) {
+        .hero {
+          grid-template-columns: 1fr;
+        }
       }
 
       @media (max-width: 720px) {
@@ -161,69 +235,107 @@
   <body>
     <main>
       <section class="hero">
-        <div class="eyebrow"><a href="./index.ja.html">日本語</a></div>
-        <div class="eyebrow">ClipboardHistory for macOS</div>
-        <h1>Fast local clipboard history, built for the menu bar.</h1>
-        <p class="lede">
-          ClipboardHistory keeps recent text and image snippets available from a compact
-          floating panel, with pinning, editing, paste-back, and local-only storage.
-        </p>
+        <div class="hero-copy">
+          <div class="eyebrow"><a href="./index.ja.html">日本語</a></div>
+          <div class="eyebrow">ClipboardHistory for macOS</div>
+          <h1>Clipboard history built for reuse, not just storage.</h1>
+          <p class="lede">
+            Keep recent text and image snippets close to the keyboard, pin the few that matter,
+            clean up copied text in-place, and paste it back into the app you were already using.
+          </p>
+          <div class="tag-row">
+            <span class="tag">Menu bar utility</span>
+            <span class="tag">Pinned workspace</span>
+            <span class="tag">Text editor mode</span>
+            <span class="tag">Paste-back workflow</span>
+            <span class="tag">Local-only</span>
+          </div>
+        </div>
+        <div class="hero-side">
+          <h2>Why people keep it open</h2>
+          <ul>
+            <li>Bring back a useful copy from minutes ago without losing flow.</li>
+            <li>Keep a small working set of snippets pinned and manually ordered.</li>
+            <li>Edit copied text before pasting it back into the previous app.</li>
+            <li>Use keyboard-first commands instead of bouncing between tools.</li>
+          </ul>
+          <p class="accent-line">Best for code, prompts, shell commands, notes, and repeated snippets.</p>
+        </div>
       </section>
 
-      <section class="download-grid">
+      <section class="section download-grid">
         <article class="download-card">
           <strong>Universal</strong>
-          <p>Recommended for most people. Works on Apple Silicon and Intel Macs.</p>
-          <a href="https://github.com/ksmkzs/clipboard/releases/latest/download/ClipboardHistory-mac-universal.zip">Download Universal</a>
+          <p>Recommended for almost everyone. One build for Apple Silicon and Intel Macs.</p>
+          <a class="button" href="https://github.com/ksmkzs/clipboard/releases/latest/download/ClipboardHistory-mac-universal.zip">Download Universal</a>
         </article>
         <article class="download-card">
           <strong>Apple Silicon</strong>
           <p>Thin build for M1, M2, M3, and newer Apple Silicon Macs.</p>
-          <a class="secondary" href="https://github.com/ksmkzs/clipboard/releases/latest/download/ClipboardHistory-mac-apple-silicon.zip">Download Apple Silicon</a>
+          <a class="button secondary" href="https://github.com/ksmkzs/clipboard/releases/latest/download/ClipboardHistory-mac-apple-silicon.zip">Download Apple Silicon</a>
         </article>
         <article class="download-card">
           <strong>Intel</strong>
-          <p>Thin build for Intel Macs. Use this only if you need an Intel-only bundle.</p>
-          <a class="secondary" href="https://github.com/ksmkzs/clipboard/releases/latest/download/ClipboardHistory-mac-intel.zip">Download Intel</a>
+          <p>Thin build for Intel Macs when you specifically want an Intel-only bundle.</p>
+          <a class="button secondary" href="https://github.com/ksmkzs/clipboard/releases/latest/download/ClipboardHistory-mac-intel.zip">Download Intel</a>
         </article>
       </section>
 
-      <section class="sections">
+      <section class="section">
+        <h2>What you can do</h2>
+        <div class="feature-grid">
+          <article class="feature-card">
+            <strong>Keep a usable history</strong>
+            <p>Store recent text and images, reopen them quickly, and send them back into the app you were using.</p>
+          </article>
+          <article class="feature-card">
+            <strong>Build a pinned lane</strong>
+            <p>Turn your most-used snippets into a small hand-curated workspace instead of fishing through history every time.</p>
+          </article>
+          <article class="feature-card">
+            <strong>Edit text before paste</strong>
+            <p>Open text items in editor mode, undo or redo changes, move lines, indent blocks, join lines, and normalize text for commands.</p>
+          </article>
+          <article class="feature-card">
+            <strong>Stay local</strong>
+            <p>No accounts, no sync, no cloud layer. ClipboardHistory is built for one Mac, one user, one fast loop.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section info-grid">
         <article class="info-card">
           <h2>Install</h2>
           <ul>
             <li>Download the build that matches your Mac.</li>
             <li>Unzip and move <code>ClipboardHistory.app</code> into <code>/Applications</code>.</li>
             <li>Launch once, then grant Accessibility permission if prompted.</li>
-            <li>Use the settings window to configure shortcuts and launch at login.</li>
-            <li>Enable Launch at Login only after the app is installed in <code>/Applications</code>.</li>
+            <li>Use Settings to configure shortcuts and launch at login.</li>
           </ul>
         </article>
         <article class="info-card">
-          <h2>Compatibility</h2>
+          <h2>Good to know</h2>
           <ul>
-            <li>macOS 14 or later</li>
-            <li>Text and image clipboard history</li>
-            <li>Apple Silicon and Intel release artifacts</li>
-            <li>Local-only workflow, no sync or account setup</li>
+            <li>Works on macOS 14 or later.</li>
+            <li>Supports both text and image clipboard history.</li>
+            <li>The Universal build is the default recommendation.</li>
+            <li>Checksums are published in each release as <code>SHA256SUMS.txt</code>.</li>
           </ul>
         </article>
         <article class="info-card">
           <h2>Project</h2>
           <p>
-            Source, issues, and release notes live on
+            Source, issues, release notes, and development history live on
             <a href="https://github.com/ksmkzs/clipboard">GitHub</a>.
-            The latest checksums are published in each release as <code>SHA256SUMS.txt</code>.
           </p>
         </article>
       </section>
 
       <p class="footer">
-        Tip: the Universal build is the default recommendation. Use the thin builds only when
-        you specifically want a smaller architecture-specific bundle.
+        Accessibility permission may be required for global hotkeys and paste-back behavior.
       </p>
       <p class="footer">
-        Accessibility permission may be required for panel hotkeys and paste-back behavior.
+        Use the Universal build unless you explicitly want an architecture-specific package.
       </p>
     </main>
   </body>
