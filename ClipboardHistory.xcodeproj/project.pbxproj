@@ -18,19 +18,11 @@
 			remoteGlobalIDString = 0EA8FE262F510B9100F7AFAB;
 			remoteInfo = ClipboardHistory;
 		};
-		0EA8FE422F510B9400F7AFAB /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 0EA8FE1F2F510B9000F7AFAB /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 0EA8FE262F510B9100F7AFAB;
-			remoteInfo = ClipboardHistory;
-		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		0EA8FE272F510B9100F7AFAB /* ClipboardHistory.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ClipboardHistory.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		0EA8FE372F510B9400F7AFAB /* ClipboardHistoryTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ClipboardHistoryTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		0EA8FE412F510B9400F7AFAB /* ClipboardHistoryUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ClipboardHistoryUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1B2C3D4E5F6000000000002 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = App/Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -55,8 +47,11 @@
 				isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 				membershipExceptions = (
 					ClipboardDedupeKey.swift,
+					CodexIntegrationManager.swift,
 					ClipboardController.swift,
 					ClipboardDataManager.swift,
+					ClipboardStoragePaths.swift,
+					ClipboardStoreBootstrapper.swift,
 					HotKeyManager.swift,
 					PasteSynthesizer.swift,
 				);
@@ -76,7 +71,13 @@
 		7A1B2C3D4E5F678900112233 /* Exceptions for "ClipboardHistoryTests" folder in "ClipboardHistoryTests" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				AppDelegateTargetSelectionTests.swift,
+				ClipboardDataManagerBehaviorTests.swift,
+				CodexIntegrationManagerTests.swift,
+				ClipboardStoreBootstrapperTests.swift,
+				ClipboardWorkflowRegressionTests.swift,
 				EditorNSTextViewKeyboardTests.swift,
+				PanelKeyboardRoutingTests.swift,
 			);
 			target = 0EA8FE362F510B9400F7AFAB /* ClipboardHistoryTests */;
 		};
@@ -140,13 +141,6 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		0EA8FE3E2F510B9400F7AFAB /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -168,7 +162,6 @@
 			children = (
 				0EA8FE272F510B9100F7AFAB /* ClipboardHistory.app */,
 				0EA8FE372F510B9400F7AFAB /* ClipboardHistoryTests.xctest */,
-				0EA8FE412F510B9400F7AFAB /* ClipboardHistoryUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -215,26 +208,6 @@
 			productReference = 0EA8FE372F510B9400F7AFAB /* ClipboardHistoryTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
-		0EA8FE402F510B9400F7AFAB /* ClipboardHistoryUITests */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = 0EA8FE512F510B9400F7AFAB /* Build configuration list for PBXNativeTarget "ClipboardHistoryUITests" */;
-			buildPhases = (
-				0EA8FE3D2F510B9400F7AFAB /* Sources */,
-				0EA8FE3E2F510B9400F7AFAB /* Frameworks */,
-				0EA8FE3F2F510B9400F7AFAB /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				0EA8FE432F510B9400F7AFAB /* PBXTargetDependency */,
-			);
-			name = ClipboardHistoryUITests;
-			packageProductDependencies = (
-			);
-			productName = ClipboardHistoryUITests;
-			productReference = 0EA8FE412F510B9400F7AFAB /* ClipboardHistoryUITests.xctest */;
-			productType = "com.apple.product-type.bundle.ui-testing";
-		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -249,10 +222,6 @@
 						CreatedOnToolsVersion = 16.4;
 					};
 					0EA8FE362F510B9400F7AFAB = {
-						CreatedOnToolsVersion = 16.4;
-						TestTargetID = 0EA8FE262F510B9100F7AFAB;
-					};
-					0EA8FE402F510B9400F7AFAB = {
 						CreatedOnToolsVersion = 16.4;
 						TestTargetID = 0EA8FE262F510B9100F7AFAB;
 					};
@@ -274,7 +243,6 @@
 			targets = (
 				0EA8FE262F510B9100F7AFAB /* ClipboardHistory */,
 				0EA8FE362F510B9400F7AFAB /* ClipboardHistoryTests */,
-				0EA8FE402F510B9400F7AFAB /* ClipboardHistoryUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -289,13 +257,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		0EA8FE352F510B9400F7AFAB /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		0EA8FE3F2F510B9400F7AFAB /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -319,13 +280,6 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		0EA8FE3D2F510B9400F7AFAB /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -333,11 +287,6 @@
 			isa = PBXTargetDependency;
 			target = 0EA8FE262F510B9100F7AFAB /* ClipboardHistory */;
 			targetProxy = 0EA8FE382F510B9400F7AFAB /* PBXContainerItemProxy */;
-		};
-		0EA8FE432F510B9400F7AFAB /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = 0EA8FE262F510B9100F7AFAB /* ClipboardHistory */;
-			targetProxy = 0EA8FE422F510B9400F7AFAB /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -564,38 +513,6 @@
 			};
 			name = Release;
 		};
-		0EA8FE522F510B9400F7AFAB /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = BHX7Y6PRF8;
-				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "kazushi-koshimo.ClipboardHistoryUITests";
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_VERSION = 5.0;
-				TEST_TARGET_NAME = ClipboardHistory;
-			};
-			name = Debug;
-		};
-		0EA8FE532F510B9400F7AFAB /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = BHX7Y6PRF8;
-				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "kazushi-koshimo.ClipboardHistoryUITests";
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_VERSION = 5.0;
-				TEST_TARGET_NAME = ClipboardHistory;
-			};
-			name = Release;
-		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -622,15 +539,6 @@
 			buildConfigurations = (
 				0EA8FE4F2F510B9400F7AFAB /* Debug */,
 				0EA8FE502F510B9400F7AFAB /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		0EA8FE512F510B9400F7AFAB /* Build configuration list for PBXNativeTarget "ClipboardHistoryUITests" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				0EA8FE522F510B9400F7AFAB /* Debug */,
-				0EA8FE532F510B9400F7AFAB /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

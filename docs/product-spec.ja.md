@@ -70,6 +70,7 @@ MVP は single-user の local desktop workflow 向けであり、shared machine 
 8. ユーザーとして、起動設定や shortcut などの基本設定を settings UI から変更したい。
 9. ユーザーとして、翻訳先言語を settings から変えられる experimental translation helper を使いたい。
 10. ユーザーとして、長文テキストを再利用前に整えるための focused text-only editor mode がほしい。
+11. ユーザーとして、空の manual note を新規作成し、main panel が閉じていても編集を続けたい。
 
 ## 7. MVP Functional Requirements
 
@@ -123,11 +124,14 @@ MVP は single-user の local desktop workflow 向けであり、shared machine 
 - keyboard command でも pinned area の開閉ができる
 - デフォルトの開閉キーは panel focus 中の `Tab`
 - pinned item は通常 history と分離した領域に表示する
+- dedicated command で先頭に空の manual note を追加できる
 - 通常 history は reverse chronological order
 - panel を開き直すたびに最新の unpinned item を初期選択し、前回 scroll 位置は復元しない
 - `↑↓` で selection 移動
 - `Esc` で panel を閉じる
 - `⌘C` で選択項目を clipboard に戻す
+- stored history を変えずに、選択 text item を「連結してコピー」できる
+- stored history を変えずに、選択 text item を「整形してコピー」できる
 - `Return` / `Enter` で選択項目を貼り付ける
 - panel focus 中の `P` で pin / unpin
 - panel focus 中の `⌥↑ / ⌥↓` で pinned order 内の selected pinned item を移動
@@ -138,10 +142,15 @@ MVP は single-user の local desktop workflow 向けであり、shared machine 
 - text item は row action から dedicated editor mode に入れる
 - editor mode は text-only で、image item には適用しない
 - row chrome が混ざらない focused text box 内に item content を表示する
+- text は常に plain text として編集する
 - standard text selection、copy、paste、undo、redo に対応する
-- indent、outdent、line move、join lines、normalize-for-command などの command-oriented editing action を持つ
+- indent、outdent、line move、join lines、normalize などの command-oriented editing action を持つ
+- join lines は各行の行頭・行末空白を削ってから改行を消し、1 本の文字列へ連結する
+- normalize は改行を維持したまま、各行の行頭・行末空白だけを削る
+- 必要な時だけ plain-text draft の横に Markdown プレビューを表示できる
 - `⌘Return` で commit
 - `Escape` で draft を保存せず cancel
+- main panel が見えていない時は、新規ノート用の editor-only window を開ける
 
 ### 7.6 Clipboard Reuse
 
@@ -149,6 +158,7 @@ MVP は single-user の local desktop workflow 向けであり、shared machine 
 - panel から paste すると、可能なら previously active app に focus を戻す
 - focus 復帰後に synthesize paste command を送る
 - panel open 中は header の compact target label などで paste target を控えめに示す
+- 詳しい keyboard guidance は `Cmd+?` で開く dedicated help surface に置き、header を command 一覧で埋めない
 - paste 完了時は短い monochrome toast / HUD を使ってもよいが、大きく派手な通知にはしない
 
 ### 7.7 Settings UI

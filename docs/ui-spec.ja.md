@@ -88,7 +88,7 @@ header は small and quiet に保ちます。
 Required contents:
 
 - app title: `Clipboard History`
-- compact keyboard help text
+- `⌘?` のような compact な help affordance
 - `Paste to Cursor in VS Code` のような compact paste-target hint
 - 右側の pinned-area open / close affordance
 
@@ -99,10 +99,10 @@ Header behavior:
 - pinned items の open / close affordance は interactive だと分かるが dominant ではない
 - paste-target hint は secondary で quiet、banner 的に大きくしない
 
-推奨 copy:
+help の扱い:
 
-- 1 行目: product title
-- 2 行目: `↑↓ Select  Cmd+C Copy  Enter Paste  P Pin  Tab Pins  Del Delete  Esc Close` のような compact legend
+- 詳しい keyboard guidance は `Cmd+?` で開く dedicated help surface に置く
+- header には help の存在だけを控えめに示し、多くの command binding を常時並べない
 
 ## 6. Main Content Region
 

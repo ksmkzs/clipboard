@@ -2,175 +2,238 @@
 
 [English README](./README.md)
 
-ClipboardHistory は、コード、プロンプト、シェルコマンド、文章、画像を何度も使い回す人のための、キーボード中心の macOS クリップボードアプリです。
+今 macOS を使っている皆様は、以下の悩みを抱えているはずです。
 
-クリップボードを「いま入っている 1 件だけ」ではなく、すぐ呼び戻せる履歴、手元に固定できる pinned、貼り付け前に整えられる editor mode を持つ作業面として扱います。
+- コピーをしたけど、前コピーしたやつなんだったっけ... Windows なら遡れるのに...
+- チャットエージェントにテキストを送りたいけど VSCode は重いな...
+- md 形式ってなんでプレビューしづらいんだろう...
+- そもそも mac のリマインド、メモ系の純正アプリ多すぎてよくわからない...
+- ターミナルで長文を消すのに `ctrl+k` を連打することはなんて非効率なんだろう...
+- 文章をコピーして Google 翻訳に投げる作業の繰り返し...
+- 私はコピーした文章の空白を消すために生きてるのかな...
 
-## 何がうれしいか
+このアプリは、あなたの悩みをとても簡単に解決します。
 
-一般的な clipboard manager は「保存する」ところまではできても、「再利用する」場面の気持ちよさが弱いことが多いです。
-
-ClipboardHistory は、次のような場面を楽にするために作っています。
-
-- 20 分前にコピーした有用な断片をもう一度使いたい
-- 毎日使う数個の snippet だけは常に見える場所へ置いておきたい
-- コピーした文章やコマンドを、別のエディタを開かず少しだけ整えたい
-- いま使っているアプリへ、そのまま戻して貼り付けたい
-
-## 独自性
-
-- `Pinned workspace`
-  通常履歴とは別に、よく使う項目を手動順序付きで保持できます。
-- `Editor mode`
-  テキスト項目をその場で開き、undo / redo、indent / outdent、行移動、join、normalize まで行えます。
-- `Paste-back workflow`
-  panel から選んだ項目を、その直前に使っていたアプリへ戻して貼り付けられます。
-- `Text + image history`
-  テキストと画像を同じ panel で扱えます。
-- `Local-first`
-  アカウント不要、同期不要、クラウド不要です。
-
-## 基本の使い方
-
-1. いつも通りテキストや画像をコピーします。
-2. `⌘⇧V` で panel を開きます。
-3. 履歴を選ぶ、pin する、必要なら editor mode で整えます。
-4. `Return` で、その項目を直前のアプリへ貼り戻します。
+---
 
 ## 主な機能
 
-### 履歴と再利用
+- [x] クリップボード履歴の自動保存 / 読み返し
+- [x] 雑に使えるテキストボックス
+- [x] なんとなくいつも使う文章はピン留め可能
+- [x] テキストの空白を自動整形
+- [x] 一文化も One Command
+- [x] 簡単操作で Markdown プレビュー
+- [x] そもそもコピーする文章が整形済み
+- [x] Codex CLI 連携で CLI に送る文章をいつものように作成できる
 
-- テキストと画像の clipboard history
-- 手動並び替え対応の pinned 項目
-- 再コピーと paste-back
-- delete / pin / reorder / join / normalize に対する undo / redo
+---
 
-### テキスト編集
+## 画面構成
 
-- テキスト項目専用の editor mode
-- macOS らしい標準的なテキスト編集挙動
-- indent / outdent
-- 行の上下移動
-- 行の結合
-- コマンド用 normalize
-- 編集系ショートカットのカスタマイズ
+### 標準ウィンドウ
 
-### アプリ動作
+通常のクリップボード履歴を扱う画面です。
 
-- グローバル shortcut と in-app shortcut の設定
-- Launch at Login
-- 翻訳先言語を設定できる experimental Google Translate shortcut
+できること:
 
-## キーボードの要点
+- クリップボード履歴一覧の表示
+- コピー / 前面アプリへの貼り付け
+- 履歴の個別ピン留め / 削除 / 名前付け
+- One Command で文章を整形
+- 直接履歴を編集可能
+- Markdown プレビュー
 
-### 通常 panel
+### 新規テキストウィンドウ
 
-- panel を開く: `⌘⇧V`
-- 翻訳: `⌘⇧T`
-- 選択項目を再コピー: `⌘C`
-- 選択項目を貼り付け: `Return`
-- 選択項目を削除: `Delete`
-- pinned pane の開閉: `Tab`
+新しくテキストを書くための独立ウィンドウです。  
+ワンコマンドでどこからでもメモを取り出せます。  
+クリップボードに自動保存。`名称未設定(12).txt` はもういりません。
 
-### editor mode
+できること:
 
-- 保存: `⌘↩`
+- 新規テキストの作成
+- Markdown プレビュー
+- `⌘↩` で前面アプリへ出力
+
+Codex 連携を設定すると:
+
+- Codex CLI で `Ctrl+G` を押すだけで、現在の入力をこのウィンドウで編集できます
+
+---
+
+## どこでも使えるショートカット
+
+- クリップボード履歴を開く / 閉じる: `⌘⇧V`
+- 現在の選択 / コピー済みコンテキストを Google 翻訳: `⌘⇧T`
+- 新規テキストウィンドウを開く: `⌃⌘N`
+- 選択項目を一文化してコピー: `⌘⌥C`
+- 選択項目の余分な空白を除いてコピー: `⌘⇧C`
+
+---
+
+## 標準ウィンドウの操作
+
+- 閉じる: `Esc`
+- 取り消し / やり直し: `⌘Z / ⌘⇧Z`
+- 選択中の項目を現在のウィンドウにペースト: `⌘↩`
+- 選択中の項目を編集: `E`
+- 選択中の項目をピン留め: `P`
+- 選択中の項目を削除: `⌫`
+- ピン留めした項目の表示 / 非表示: `Tab`
+- 選択中の項目の空白を整形してコピー: `⌘⇧C`
+- 選択中の項目を一文化してコピー: `⌘⌥C`
+
+---
+
+## 編集ウィンドウの操作
+
 - キャンセル: `Esc`
-- indent / outdent: `Tab` / `⇧Tab`
-- 行の上下移動: `⌥↑` / `⌥↓`
-- 行の結合: `⌘J`
-- コマンド用 normalize: `⌘⇧J`
+- 確定: `⌘↩`
+- 取り消し / やり直し: `⌘Z / ⌘⇧Z`
+- まとめてインデント: `Tab`
+- まとめてアウトデント: `⇧Tab`
+- 行単位で移動: `⌥↑ / ⌥↓`
+- Markdown プレビュー: `⌘⌥P`
+- 選択中の項目の空白を整形: `⌘⇧J`
+- 選択中の項目を一文化: `⌘J`
 
-## ダウンロード
+---
 
-- 配布ページ: https://ksmkzs.github.io/clipboard/
-- 最新 release: https://github.com/ksmkzs/clipboard/releases/latest
+## テキスト整形仕様
 
-利用できる配布物:
+### 選択項目の余分な空白を除く
 
-- `ClipboardHistory-mac-universal.zip`
-- `ClipboardHistory-mac-apple-silicon.zip`
-- `ClipboardHistory-mac-intel.zip`
-- `SHA256SUMS.txt`
+各行の先頭と末尾の空白を削除し、改行は維持します。
 
-## インストール
+例:
 
-1. 自分の Mac に合う build をダウンロードします。
-2. `ClipboardHistory.app` を展開します。
-3. `/Applications` に移動します。
-4. 一度起動します。
-5. macOS に求められた場合は Accessibility 権限を許可します。
-6. Settings で shortcut や Launch at Login を調整します。
-
-## 対応環境
-
-- macOS 14 以降
-- Apple Silicon / Intel 向け release target
-- ローカル利用を前提とした設計で、同期前提の cross-device workflow には寄せていません
-
-## 権限
-
-ClipboardHistory では次の権限が必要になることがあります。
-
-- global hotkey と paste-back のための Accessibility 権限
-- クリップボード履歴監視に伴う通常の clipboard access
-
-## 開発
-
-repository から build:
-
-```sh
-xcodebuild -project ClipboardHistory.xcodeproj -scheme ClipboardHistory -configuration Debug CODE_SIGNING_ALLOWED=NO build
+```txt
+"  a b   c  
+    d"
 ```
 
-配布用 release artifact を build:
+→
 
-```sh
+```txt
+"a b   c
+d"
+```
+
+### 選択項目を一文に
+
+各行の先頭と末尾の空白を削除してから、改行を消します。
+
+例:
+
+```txt
+"  a b   c  
+ d"
+```
+
+→
+
+```txt
+"a b   cd"
+```
+
+---
+
+## Codex CLI 連携
+
+ClipboardHistory は、Codex CLI の `Ctrl+G` 外部エディタ先として使えます。
+
+想定フロー:
+
+1. Codex CLI で `Ctrl+G`
+2. ClipboardHistory の Codex 用ウィンドウが開く
+3. 現在の Codex 入力内容がそのまま表示される
+4. 編集する
+5. `⌘↩` で Codex に反映する
+
+補足:
+
+- Codex 用ウィンドウでは autosave しません
+- `⌘↩` した時だけ Codex 側へ反映します
+
+---
+
+## Settings
+
+Settings では主に以下を設定できます。
+
+- グローバルショートカット
+- 標準ウィンドウのショートカット
+- 編集ウィンドウのショートカット
+- グローバル特殊コピーの on / off
+- テーマ
+- UI ズーム
+- 表示言語
+- Launch at Login
+- Codex 連携の導入 / 確認 / 削除
+
+---
+
+## テーマ
+
+複数のテーマプリセットを用意しています。  
+Settings ではプレビューを見ながら切り替えられます。
+
+例:
+
+- Graphite
+- Terminal
+- Amber
+- Frost
+- Nord
+- Cobalt
+- Sakura
+- Forest
+
+---
+
+## アクセシビリティ権限について
+
+以下の機能にはアクセシビリティ権限が必要です。
+
+- 前面アプリへの paste-back
+- 他アプリ上の選択テキスト取得
+- 翻訳
+- グローバル特殊コピー
+
+未許可の場合、一部機能は動作しません。
+
+---
+
+## ビルド
+
+```zsh
+xcodebuild -project ClipboardHistory.xcodeproj -scheme ClipboardHistory -configuration Debug build
+```
+
+---
+
+## リリースビルド
+
+```zsh
 ./scripts/package_release.sh
 ```
 
 生成されるファイル:
 
-- `ClipboardHistory-mac-universal.zip`
-- `ClipboardHistory-mac-apple-silicon.zip`
-- `ClipboardHistory-mac-intel.zip`
-- `SHA256SUMS.txt`
+- `build/release/ClipboardHistory-mac-universal.zip`
+- `build/release/ClipboardHistory-mac-apple-silicon.zip`
+- `build/release/ClipboardHistory-mac-intel.zip`
+- `build/release/SHA256SUMS.txt`
 
-## 検証
+---
 
-現在の自動検証対象:
+## 状態
 
-- editor keyboard command handling
-- editor 専用 undo / redo routing
-- 非テキスト項目の persistence undo / redo logic
-- 実際の TextEdit ウィンドウに対する `Enter` paste smoke test
-- TextEdit と Script Editor を切り替えた paste-target switching smoke test
+ClipboardHistory は現在も改善中です。  
+ショートカット、外部エディタ連携、ウィンドウ挙動、テーマ、補助機能まわりは今後も調整される可能性があります。
 
-手元の Mac で追加確認したほうがよい項目:
-
-- logout / login をまたぐ Launch at Login
-- 複数の Mac / macOS バージョンでの最終挙動
-- zip 展開後の packaged build の初回起動
-
-## Repository 構成
-
-- `App/`: app lifecycle、settings state、app delegate
-- `Managers/`: clipboard capture、persistence、paste、hotkeys
-- `Models/`: SwiftData model
-- `Views/`: panel UI、editor UI、AppKit bridge
-- `ClipboardHistoryTests/`: keyboard / editing 周りの focused tests
-- `docs/`: product / UI / quality 関連の文書
-
-## 文書
-
-- [English README](./README.md)
-- [配布ページ 英語版](./docs/index.html)
-- [配布ページ 日本語版](./docs/index.ja.html)
-- [Product Specification 日本語版](./docs/product-spec.ja.md)
-- [UI Specification 日本語版](./docs/ui-spec.ja.md)
-- [Quality Plan 日本語版](./docs/quality-plan.ja.md)
-- [Data Model Design 日本語版](./docs/data-model-design.ja.md)
+---
 
 ## License
 

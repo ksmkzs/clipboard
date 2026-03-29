@@ -1,5 +1,6 @@
 import AppKit
 import Carbon
+import CryptoKit
 import ServiceManagement
 import SwiftData
 import SwiftUI
@@ -25,6 +26,13 @@ enum HotKeyRegistrationState: Equatable {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWindowDelegate {
+    typealias CodexIntegrationStatus = ClipboardCodexIntegrationStatus
+
+    private enum LaunchArgument {
+        static let openPanelOnLaunch = "--codex-open-panel-on-launch"
+        static let openHelpOnLaunch = "--codex-open-help-on-launch"
+    }
+
     private enum Layout {
         static let panelWidth: CGFloat = 320
         static let panelHeight: CGFloat = 420
@@ -43,6 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         case togglePanel = 100
         case translateNow = 101
         case openSettings = 102
+        case newNote = 103
         case quit = 199
     }
     
@@ -58,7 +67,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     private var highlightedPanelItem: ClipboardItem?
     private var settingsWindowController: NSWindowController?
     private var settingsWindowCloseObserver: NSObjectProtocol?
+    private var noteEditorWindowController: NSWindowController?
+    private var noteEditorItemID: UUID?
+    private var noteEditorExternalFileURL: URL?
+    private var noteEditorCompletionMarkerURL: URL?
+    private var noteEditorDraftText = ""
+    private var noteEditorAutosaveWorkItem: DispatchWorkItem?
+    private var noteEditorShouldCommitExternalDraft = false
+    private var lastClosedNoteEditorItemID: UUID?
+    private var helpPanel: NSPanel?
+    private var floatingFeedbackPanel: NSPanel?
+    private var floatingFeedbackRootView: NSView?
+    private var floatingFeedbackLabel: NSTextField?
+    private var floatingFeedbackBackgroundView: NSView?
+    private var floatingFeedbackDismissTask: DispatchWorkItem?
+    private var helpRequestObserver: NSObjectProtocol?
+    private var codexOpenRequestTimer: DispatchSourceTimer?
     private var suppressPanelAutoClose = false
+    private var panelAutoCloseSuppressionTask: DispatchWorkItem?
+    private var launchAutomationAutoCloseSuppressionTask: DispatchWorkItem?
     private var anchorDebugWindows: [String: NSWindow] = [:]
     private var anchorDebugHideTask: DispatchWorkItem?
     private var lastAnchorPoint: NSPoint?
@@ -72,6 +99,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     private var translateHotKeyShortcut = AppSettings.default.translationShortcut
     private var panelHotKeyRegistrationID: UInt32?
     private var translateHotKeyRegistrationID: UInt32?
+    private var globalNewNoteHotKeyRegistrationID: UInt32?
+    private var globalCopyJoinedHotKeyRegistrationID: UInt32?
+    private var globalCopyNormalizedHotKeyRegistrationID: UInt32?
+    private var hasPresentedPanelThisLaunch = false
+
+    private var hasAnyClipboardWindowVisible: Bool {
+        panel?.isVisible == true
+            || noteEditorWindowController?.window?.isVisible == true
+            || settingsWindowController?.window?.isVisible == true
+            || helpPanel?.isVisible == true
+    }
 
     private struct PanelPresentationContext {
         let finalFrame: NSRect
@@ -99,6 +137,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         let previousTerminated: Bool
     }
 
+    struct HelpPanelPlacement: Equatable {
+        enum Side: Equatable {
+            case right
+            case left
+            case centered
+        }
+
+        let frame: NSRect
+        let side: Side
+    }
+
     static func preferredTargetPID(for decision: TargetAppDecision) -> pid_t? {
         if let frontmostPID = decision.frontmostPID,
            frontmostPID != decision.currentPID,
@@ -120,44 +169,127 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
 
         return nil
     }
+
+    static var isRunningAutomatedTests: Bool {
+        let environment = ProcessInfo.processInfo.environment
+        return environment["XCTestConfigurationFilePath"] != nil
+            || environment["XCTestBundlePath"] != nil
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+
+    func application(_ sender: NSApplication, openFiles filenames: [String]) {
+        guard let firstPath = filenames.first else {
+            sender.reply(toOpenOrPrint: .failure)
+            return
+        }
+
+        openExternalCodexEditor(for: URL(fileURLWithPath: firstPath).standardizedFileURL)
+        sender.reply(toOpenOrPrint: .success)
+    }
     
     func applicationDidFinishLaunching(_ notification: Notification) {
-        requestAccessibilityPermissions()
         settings = settingsStore.load()
-        syncLaunchAtLoginState()
         panelHotKeyShortcut = settings.panelShortcut
         translateHotKeyShortcut = settings.translationShortcut
-        
+
         sharedContainer = getModelContainer()
         dataManager = ClipboardDataManager(
             modelContext: ModelContext(sharedContainer),
             maxHistoryItems: settings.historyLimit
         )
         clipboardController = ClipboardController(dataManager: dataManager)
-        
+        clipboardController.onExternalCapture = nil
+        clipboardController.shouldHandleKeyboardCopyEvent = { [weak self] in
+            guard let self else { return false }
+            return !self.hasAnyClipboardWindowVisible
+        }
+
         setupPanel()
+        observeHelpRequests()
+
+        guard !Self.isRunningAutomatedTests else {
+            return
+        }
+
+        requestAccessibilityPermissions()
+        syncLaunchAtLoginState()
         setupStatusItem()
         registerHotKeys()
         clipboardController.startMonitoring()
+        startCodexOpenRequestMonitor()
+        performLaunchAutomationIfRequested()
+    }
+
+    private func startCodexOpenRequestMonitor() {
+        codexOpenRequestTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+        timer.schedule(deadline: .now() + 0.2, repeating: 0.25)
+        timer.setEventHandler { [weak self] in
+            self?.consumeCodexOpenRequestIfNeeded()
+        }
+        codexOpenRequestTimer = timer
+        timer.resume()
+    }
+
+    private func consumeCodexOpenRequestIfNeeded() {
+        let storePaths = ClipboardStorePaths.default()
+        let requestURL = storePaths.codexOpenRequestURL
+
+        guard FileManager.default.fileExists(atPath: requestURL.path),
+              let requestText = try? String(contentsOf: requestURL, encoding: .utf8)
+        else {
+            return
+        }
+
+        let lines = requestText
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map(String.init)
+        guard lines.count >= 2 else {
+            try? FileManager.default.removeItem(at: requestURL)
+            return
+        }
+
+        let filePath = lines[1].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !filePath.isEmpty else {
+            try? FileManager.default.removeItem(at: requestURL)
+            return
+        }
+
+        try? FileManager.default.removeItem(at: requestURL)
+        DispatchQueue.main.async { [weak self] in
+            self?.openExternalCodexEditor(for: URL(fileURLWithPath: filePath).standardizedFileURL)
+        }
     }
     
+    @MainActor
     private func getModelContainer() -> ModelContainer {
-        let schema = Schema([ClipboardItem.self])
-        let supportDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let appDirectory = supportDirectory.appendingPathComponent("ClipboardHistory", isDirectory: true)
-        let storeURL = appDirectory.appendingPathComponent("ClipboardHistory.store")
-        
-        try? FileManager.default.createDirectory(at: appDirectory, withIntermediateDirectories: true)
-        
-        let configuration = ModelConfiguration(schema: schema, url: storeURL, allowsSave: true)
-        return try! ModelContainer(for: schema, configurations: [configuration])
+        if Self.isRunningAutomatedTests {
+            let schema = Schema([ClipboardItem.self])
+            let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+            return try! ModelContainer(for: schema, configurations: [configuration])
+        }
+        return try! ClipboardStoreBootstrapper.makeContainer()
     }
     
     private func requestAccessibilityPermissions() {
+        let promptStateKey = "app.accessibility.prompted"
+        if AXIsProcessTrusted() {
+            return
+        }
+
+        guard !UserDefaults.standard.bool(forKey: promptStateKey) else {
+            print("Accessibility permission is required for Enter-to-paste and selected-text translation.")
+            return
+        }
+
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         let isTrusted = AXIsProcessTrustedWithOptions(options)
-        
+
         if !isTrusted {
+            UserDefaults.standard.set(true, forKey: promptStateKey)
             print("Accessibility permission is required for Enter-to-paste and selected-text translation.")
         }
     }
@@ -168,12 +300,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             contentRect: NSRect(x: 0, y: 0, width: initialSize.width, height: initialSize.height)
         )
         panel.delegate = self
-        
-        let rootView = ClipboardHistoryView(
+        panel.contentView = NSHostingView(rootView: makePanelRootView())
+    }
+
+    private func makePanelRootView() -> some View {
+        ClipboardHistoryView(
             appDelegate: self,
             dataManager: dataManager,
             onCopyRequest: { [weak self] item in
                 self?.copyToClipboard(item)
+            },
+            onCopyTextRequest: { [weak self] text, message in
+                self?.copyTextToClipboard(text, feedbackMessage: message, storeInHistory: true)
             },
             onPasteRequest: { [weak self] item in
                 self?.pasteSelectedItem(item)
@@ -189,8 +327,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             }
         )
         .modelContainer(sharedContainer)
-        
-        panel.contentView = NSHostingView(rootView: rootView)
+    }
+
+    private func performLaunchAutomationIfRequested() {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard arguments.contains(LaunchArgument.openPanelOnLaunch) || arguments.contains(LaunchArgument.openHelpOnLaunch) else {
+            return
+        }
+
+        suppressPanelAutoClose = true
+        launchAutomationAutoCloseSuppressionTask?.cancel()
+        let task = DispatchWorkItem { [weak self] in
+            self?.suppressPanelAutoClose = false
+            self?.launchAutomationAutoCloseSuppressionTask = nil
+        }
+        launchAutomationAutoCloseSuppressionTask = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: task)
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            guard let self else { return }
+
+            if arguments.contains(LaunchArgument.openPanelOnLaunch) {
+                self.togglePanel()
+            }
+
+            if arguments.contains(LaunchArgument.openHelpOnLaunch) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                    NotificationCenter.default.post(
+                        name: .clipboardHelpRequested,
+                        object: nil,
+                        userInfo: ["isEditingSelectedText": false]
+                    )
+                }
+            }
+        }
     }
     
     private func setupStatusItem() {
@@ -221,6 +391,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         }
         translateHotKeyRegistrationID = translateResult.registrationID
         translationHotKeyState = translateResult.isSuccess ? .registered : .failed(translateResult.status)
+
+        if let shortcut = settings.globalNewNoteShortcut {
+            let result = HotKeyManager.shared.registerDetailed(shortcut: shortcut) { [weak self] in
+                self?.createNewNoteFromAnyState()
+            }
+            globalNewNoteHotKeyRegistrationID = result.registrationID
+        }
+
+        if settings.globalCopyJoinedEnabled,
+           let shortcut = settings.globalCopyJoinedShortcut {
+            let result = HotKeyManager.shared.registerDetailed(shortcut: shortcut) { [weak self] in
+                guard let self, self.settings.globalCopyJoinedEnabled, !self.hasAnyClipboardWindowVisible else { return }
+                let targetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+                self.copySelectedTextFromCurrentContext(
+                    feedbackMessage: "Joined",
+                    targetPID: targetPID,
+                    transform: joinLinesText
+                )
+            }
+            globalCopyJoinedHotKeyRegistrationID = result.registrationID
+        }
+
+        if settings.globalCopyNormalizedEnabled,
+           let shortcut = settings.globalCopyNormalizedShortcut {
+            let result = HotKeyManager.shared.registerDetailed(shortcut: shortcut) { [weak self] in
+                guard let self, self.settings.globalCopyNormalizedEnabled, !self.hasAnyClipboardWindowVisible else { return }
+                let targetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+                self.copySelectedTextFromCurrentContext(
+                    feedbackMessage: "Normalized",
+                    targetPID: targetPID,
+                    transform: normalizeCommandText
+                )
+            }
+            globalCopyNormalizedHotKeyRegistrationID = result.registrationID
+        }
         
         updateStatusItemToolTip()
         rebuildStatusMenu()
@@ -236,6 +441,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             HotKeyManager.shared.unregister(registrationID: id)
             translateHotKeyRegistrationID = nil
             translationHotKeyState = .notRegistered
+        }
+        if let id = globalNewNoteHotKeyRegistrationID {
+            HotKeyManager.shared.unregister(registrationID: id)
+            globalNewNoteHotKeyRegistrationID = nil
+        }
+        if let id = globalCopyJoinedHotKeyRegistrationID {
+            HotKeyManager.shared.unregister(registrationID: id)
+            globalCopyJoinedHotKeyRegistrationID = nil
+        }
+        if let id = globalCopyNormalizedHotKeyRegistrationID {
+            HotKeyManager.shared.unregister(registrationID: id)
+            globalCopyNormalizedHotKeyRegistrationID = nil
         }
     }
     
@@ -266,6 +483,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         translateItem.tag = MenuTag.translateNow.rawValue
         translateItem.target = self
         statusMenu.addItem(translateItem)
+
+        let newNoteItem = NSMenuItem(
+            title: "New Note (\(HotKeyManager.displayString(for: settings.newNoteShortcut)))",
+            action: #selector(createNewNoteFromMenu),
+            keyEquivalent: ""
+        )
+        newNoteItem.tag = MenuTag.newNote.rawValue
+        newNoteItem.target = self
+        statusMenu.addItem(newNoteItem)
         
         statusMenu.addItem(.separator())
         
@@ -288,13 +514,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         NSMenu.popUpContextMenu(statusMenu, with: event, for: button)
     }
     
-    private func togglePanel() {
-        if isPanelFrontmost() {
-            closePanelAndReactivate()
-            return
-        }
-        
-        let targetApp = preferredPlacementTargetApp()
+    private func showPanel() {
+        temporarilySuppressPanelAutoClose(for: 0.45)
+        let targetApp = currentPlacementTargetApp()
         previouslyActiveApp = targetApp
         placementTargetApp = targetApp
         let presentationContext = panelPresentationContext()
@@ -317,7 +539,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         panel.setFrame(presentationContext.finalFrame, display: true)
         panel.orderFrontRegardless()
         panel.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        hasPresentedPanelThisLaunch = true
+        activateCurrentApp()
+        if let noteWindow = noteEditorWindowController?.window, noteWindow.isVisible {
+            noteWindow.order(.above, relativeTo: panel.windowNumber)
+            noteWindow.makeKeyAndOrderFront(nil)
+        }
+        DispatchQueue.main.async { [weak self] in
+            self?.clipboardController.syncNow()
+        }
+    }
+
+    private func temporarilySuppressPanelAutoClose(for duration: TimeInterval) {
+        suppressPanelAutoClose = true
+        panelAutoCloseSuppressionTask?.cancel()
+        let task = DispatchWorkItem { [weak self] in
+            self?.suppressPanelAutoClose = false
+            self?.panelAutoCloseSuppressionTask = nil
+        }
+        panelAutoCloseSuppressionTask = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: task)
+    }
+
+    private func togglePanel() {
+        if isPanelFrontmost() {
+            closePanelAndReactivate()
+            return
+        }
+
+        showPanel()
     }
     
     private func isPanelFrontmost() -> Bool {
@@ -325,6 +575,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     }
     
     private func panelPresentationContext() -> PanelPresentationContext {
+        if !hasPersistedPanelSize() || !hasPresentedPanelThisLaunch {
+            return presentationContextAtScreenCenter()
+        }
         if let context = presentationContextForFrontmostWindow() {
             return context
         }
@@ -332,8 +585,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     }
 
     private func presentationContextAtScreenCenter() -> PanelPresentationContext {
-        let mouseLocation = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first(where: { $0.frame.contains(mouseLocation) }) ?? NSScreen.main
+        let screen = preferredPlacementTargetApp()
+            .flatMap(frontmostWindowFrame(for:))
+            .flatMap(screen(containing:))
+            ?? panel.screen
+            ?? NSScreen.main
         guard let screen else {
             let preferredSize = preferredPanelSize()
             let fallback = NSRect(x: 120, y: 120, width: preferredSize.width, height: preferredSize.height)
@@ -355,7 +611,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     }
 
     private func presentationContextForFrontmostWindow() -> PanelPresentationContext? {
-        let placementApp = preferredPlacementTargetApp()
+        let placementApp = currentPlacementTargetApp()
         placementTargetApp = placementApp
         let windowRect = frontmostWindowFrame(for: placementApp)
         guard let windowRect,
@@ -425,7 +681,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     }
 
     func windowDidResignKey(_ notification: Notification) {
-        guard let window = notification.object as? NSWindow, window == panel, panel.isVisible else {
+        guard let window = notification.object as? NSWindow else {
+            return
+        }
+        if window == helpPanel {
+            closeHelpPanel(refocusClipboardPanel: false)
+            return
+        }
+        guard window == panel, panel.isVisible else {
+            return
+        }
+        if helpPanel?.isVisible == true {
             return
         }
         if suppressPanelAutoClose || settingsWindowController?.window?.isVisible == true {
@@ -434,11 +700,259 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         closePanelAndReactivate()
     }
 
+    func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else {
+            return
+        }
+
+        if window == noteEditorWindowController?.window {
+            return
+        }
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard sender == noteEditorWindowController?.window else {
+            return true
+        }
+        dismissStandaloneNoteEditorWindow(copyToClipboard: noteEditorExternalFileURL == nil)
+        return false
+    }
+
     private func closePanelAndReactivate() {
         NotificationCenter.default.post(name: .clipboardPanelWillClose, object: nil)
+        closeHelpPanel(refocusClipboardPanel: false)
         panel.orderOut(nil)
         hideAnchorDebugMarker()
         reactivatePreviouslyActiveApp()
+    }
+
+    func createNewNoteFromAnyState() {
+        if let window = noteEditorWindowController?.window, window.isVisible {
+            if noteEditorExternalFileURL != nil {
+                activateCurrentApp()
+                noteEditorWindowController?.showWindow(nil)
+                window.orderFront(nil)
+                window.makeKeyAndOrderFront(nil)
+            } else if NSApp.keyWindow == window || NSApp.mainWindow == window {
+                dismissStandaloneNoteEditorWindow(copyToClipboard: true)
+            } else {
+                activateCurrentApp()
+                noteEditorWindowController?.showWindow(nil)
+                window.orderFront(nil)
+                window.makeKeyAndOrderFront(nil)
+            }
+            return
+        }
+
+        let targetApp = currentPlacementTargetApp()
+        previouslyActiveApp = targetApp
+        placementTargetApp = targetApp
+
+        let itemID: UUID
+        if settings.newNoteReopenBehavior == .restoreLastDraft,
+           let lastClosedNoteEditorItemID,
+           dataManager.snapshotItem(id: lastClosedNoteEditorItemID) != nil {
+            itemID = lastClosedNoteEditorItemID
+        } else if let item = dataManager.createManualNote(text: "") {
+            itemID = item.id
+        } else {
+            return
+        }
+
+        NotificationCenter.default.post(
+            name: .clipboardManualNoteCreated,
+            object: nil,
+            userInfo: ["itemID": itemID]
+        )
+        openStandaloneNoteEditor(for: itemID)
+    }
+
+    private func observeHelpRequests() {
+        guard helpRequestObserver == nil else { return }
+        helpRequestObserver = NotificationCenter.default.addObserver(
+            forName: .clipboardHelpRequested,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let isEditingSelectedText = notification.userInfo?["isEditingSelectedText"] as? Bool ?? false
+            self?.toggleHelpPanel(isEditingSelectedText: isEditingSelectedText)
+        }
+    }
+
+    private func toggleHelpPanel(isEditingSelectedText: Bool) {
+        if helpPanel?.isVisible == true {
+            closeHelpPanel(refocusClipboardPanel: true)
+            return
+        }
+        showHelpPanel(isEditingSelectedText: isEditingSelectedText)
+    }
+
+    private func showHelpPanel(isEditingSelectedText: Bool) {
+        let panel = helpPanel ?? makeHelpPanel()
+        let targetFrame = helpPanelFrame(for: panel)
+        if let hostingController = panel.contentViewController as? NSHostingController<ClipboardHelpPanelContent> {
+            hostingController.rootView = ClipboardHelpPanelContent(
+                settings: settings,
+                isEditingSelectedText: isEditingSelectedText,
+                onClose: { [weak self] in
+                    self?.closeHelpPanel(refocusClipboardPanel: true)
+                }
+            )
+        }
+        panel.setFrame(targetFrame, display: true)
+        if panel.parent != self.panel {
+            self.panel.addChildWindow(panel, ordered: .above)
+        }
+        panel.orderFrontRegardless()
+        panel.makeKeyAndOrderFront(nil)
+        helpPanel = panel
+    }
+
+    private func makeHelpPanel() -> NSPanel {
+        let hostingController = NSHostingController(
+            rootView: ClipboardHelpPanelContent(
+                settings: settings,
+                isEditingSelectedText: false,
+                onClose: { [weak self] in
+                    self?.closeHelpPanel(refocusClipboardPanel: true)
+                }
+            )
+        )
+
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 440),
+            styleMask: [.titled, .closable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        panel.title = "Keyboard Help"
+        panel.isReleasedWhenClosed = false
+        panel.isFloatingPanel = true
+        panel.level = .floating
+        panel.hidesOnDeactivate = true
+        panel.collectionBehavior = [.moveToActiveSpace]
+        panel.delegate = self
+        panel.contentViewController = hostingController
+        return panel
+    }
+
+    private func helpPanelFrame(for helpPanel: NSPanel) -> NSRect {
+        let screen = screen(containing: panel.frame) ?? panel.screen ?? NSScreen.main
+        let visibleFrame = (screen?.visibleFrame ?? panel.frame).insetBy(dx: Layout.screenMargin, dy: Layout.screenMargin)
+        let desiredWidth = min(420, max(320, visibleFrame.width - 40))
+        let desiredHeight = min(520, max(280, visibleFrame.height - 40))
+        return Self.helpPanelPlacement(
+            for: panel.frame,
+            within: visibleFrame,
+            helpSize: NSSize(width: desiredWidth, height: desiredHeight),
+            gap: 14
+        ).frame
+    }
+
+    static func helpPanelPlacement(
+        for panelFrame: NSRect,
+        within visibleFrame: NSRect,
+        helpSize: NSSize,
+        gap: CGFloat
+    ) -> HelpPanelPlacement {
+        let alignedY = min(
+            max(panelFrame.maxY - helpSize.height, visibleFrame.minY),
+            visibleFrame.maxY - helpSize.height
+        )
+
+        let rightX = panelFrame.maxX + gap
+        if rightX + helpSize.width <= visibleFrame.maxX {
+            return HelpPanelPlacement(
+                frame: clampedAuxiliaryFrame(
+                    NSRect(x: rightX, y: alignedY, width: helpSize.width, height: helpSize.height),
+                    within: visibleFrame
+                ),
+                side: .right
+            )
+        }
+
+        let leftX = panelFrame.minX - gap - helpSize.width
+        if leftX >= visibleFrame.minX {
+            return HelpPanelPlacement(
+                frame: clampedAuxiliaryFrame(
+                    NSRect(x: leftX, y: alignedY, width: helpSize.width, height: helpSize.height),
+                    within: visibleFrame
+                ),
+                side: .left
+            )
+        }
+
+        return HelpPanelPlacement(
+            frame: clampedAuxiliaryFrame(
+                NSRect(
+                    x: visibleFrame.midX - (helpSize.width / 2),
+                    y: visibleFrame.midY - (helpSize.height / 2),
+                    width: helpSize.width,
+                    height: helpSize.height
+                ),
+                within: visibleFrame
+            ),
+            side: .centered
+        )
+    }
+
+    static func auxiliaryWindowPlacement(
+        anchorFrame: NSRect,
+        visibleFrame: NSRect,
+        windowSize: NSSize,
+        gap: CGFloat
+    ) -> NSRect {
+        let alignedY = min(
+            max(anchorFrame.maxY - windowSize.height, visibleFrame.minY),
+            visibleFrame.maxY - windowSize.height
+        )
+
+        let rightFrame = NSRect(
+            x: anchorFrame.maxX + gap,
+            y: alignedY,
+            width: windowSize.width,
+            height: windowSize.height
+        )
+        if rightFrame.maxX <= visibleFrame.maxX {
+            return clampedAuxiliaryFrame(rightFrame, within: visibleFrame)
+        }
+
+        let leftFrame = NSRect(
+            x: anchorFrame.minX - gap - windowSize.width,
+            y: alignedY,
+            width: windowSize.width,
+            height: windowSize.height
+        )
+        if leftFrame.minX >= visibleFrame.minX {
+            return clampedAuxiliaryFrame(leftFrame, within: visibleFrame)
+        }
+
+        return clampedAuxiliaryFrame(
+            NSRect(
+                x: visibleFrame.midX - (windowSize.width / 2),
+                y: visibleFrame.midY - (windowSize.height / 2),
+                width: windowSize.width,
+                height: windowSize.height
+            ),
+            within: visibleFrame
+        )
+    }
+
+    static func clampedAuxiliaryFrame(_ frame: NSRect, within visibleFrame: NSRect) -> NSRect {
+        let width = min(frame.width, visibleFrame.width)
+        let height = min(frame.height, visibleFrame.height)
+        let x = min(max(frame.origin.x, visibleFrame.minX), visibleFrame.maxX - width)
+        let y = min(max(frame.origin.y, visibleFrame.minY), visibleFrame.maxY - height)
+        return NSRect(x: x, y: y, width: width, height: height)
+    }
+
+    private func closeHelpPanel(refocusClipboardPanel: Bool) {
+        guard let helpPanel else { return }
+        panel.removeChildWindow(helpPanel)
+        helpPanel.orderOut(nil)
+        if refocusClipboardPanel, panel.isVisible {
+            panel.makeKeyAndOrderFront(nil)
+        }
     }
 
     private func reactivatePreviouslyActiveApp() {
@@ -446,8 +960,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
               app != NSRunningApplication.current else {
             return
         }
-
-        app.activate(options: [.activateIgnoringOtherApps])
+        activateTargetApp(app)
     }
     
     private func copyToClipboard(_ item: ClipboardItem) {
@@ -456,7 +969,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         
-        if item.type == .text, let text = item.textContent {
+        if item.type == .text, let text = dataManager.resolvedText(for: item) {
             pasteboard.setString(text, forType: .string)
         } else if item.type == .image, let fileName = item.imageFileName,
                   let image = dataManager.loadImage(fileName: fileName),
@@ -468,17 +981,263 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         }
         
         clipboardController.finishInternalPaste()
+        if !panel.isVisible {
+            showFloatingFeedback(message: "Copied", style: .copy)
+        }
+    }
+
+    private func copyTextToClipboard(
+        _ text: String,
+        feedbackMessage: String? = nil,
+        forceFloatingFeedback: Bool = false,
+        storeInHistory: Bool = false,
+        feedbackStyle: FloatingFeedbackStyle = .copy
+    ) {
+        clipboardController.prepareForInternalPaste()
+
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+
+        clipboardController.finishInternalPaste()
+        if storeInHistory {
+            dataManager.storeCapture(
+                .init(payload: .text(text), dedupeKey: ClipboardDedupeKey.text(text))
+            )
+        }
+        if forceFloatingFeedback || !panel.isVisible {
+            showFloatingFeedback(message: feedbackMessage ?? "Copied", style: feedbackStyle)
+        }
+    }
+
+    func pasteTextToFrontApp(_ text: String) {
+        copyTextToClipboard(text, feedbackMessage: "Copied")
+        let targetApp = resolvedPasteTargetApp()
+
+        if panel.isVisible {
+            closePanelAndReactivate()
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            if let targetApp {
+                self.activateTargetApp(targetApp)
+            } else {
+                self.reactivatePreviouslyActiveApp()
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                PasteSynthesizer.simulateCmdV()
+            }
+        }
+    }
+
+    private func copySelectedTextFromCurrentContext(
+        feedbackMessage: String,
+        targetPID: pid_t? = nil,
+        transform: @escaping (String) -> String
+    ) {
+        if panel.isVisible,
+           let item = highlightedPanelItem,
+           item.type == .text,
+           let text = dataManager.resolvedText(for: item),
+           !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            copyTextToClipboard(
+                transform(text),
+                feedbackMessage: feedbackMessage,
+                forceFloatingFeedback: true,
+                storeInHistory: true,
+                feedbackStyle: floatingFeedbackStyle(for: feedbackMessage)
+            )
+            return
+        }
+
+        if let selectedText = selectedTextFromFocusedElement(),
+           !selectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            copyTextToClipboard(
+                transform(selectedText),
+                feedbackMessage: feedbackMessage,
+                forceFloatingFeedback: true,
+                storeInHistory: true,
+                feedbackStyle: floatingFeedbackStyle(for: feedbackMessage)
+            )
+            return
+        }
+
+        fallbackCopySelectedTextFromFrontmostApp(
+            feedbackMessage: feedbackMessage,
+            targetPID: targetPID,
+            transform: transform
+        )
+    }
+
+    private func fallbackCopySelectedTextFromFrontmostApp(
+        feedbackMessage: String,
+        targetPID: pid_t?,
+        transform: @escaping (String) -> String
+    ) {
+        let previousChangeCount = NSPasteboard.general.changeCount
+        let previousClipboardString = NSPasteboard.general.string(forType: .string)
+        clipboardController.suppressNextCapturedExternalCopy()
+        clipboardController.suppressNextCapturedCopyKeystroke()
+
+        scheduleFallbackCopyAfterModifiersRelease(
+            targetPID: targetPID,
+            previousChangeCount: previousChangeCount,
+            previousClipboardString: previousClipboardString,
+            feedbackMessage: feedbackMessage,
+            transform: transform,
+            attemptsRemaining: 20
+        )
+    }
+
+    private func scheduleFallbackCopyAfterModifiersRelease(
+        targetPID: pid_t?,
+        previousChangeCount: Int,
+        previousClipboardString: String?,
+        feedbackMessage: String,
+        transform: @escaping (String) -> String,
+        attemptsRemaining: Int
+    ) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { [weak self] in
+            guard let self else { return }
+
+            if self.areModifierKeysStillPressed(), attemptsRemaining > 0 {
+                self.scheduleFallbackCopyAfterModifiersRelease(
+                    targetPID: targetPID,
+                    previousChangeCount: previousChangeCount,
+                    previousClipboardString: previousClipboardString,
+                    feedbackMessage: feedbackMessage,
+                    transform: transform,
+                    attemptsRemaining: attemptsRemaining - 1
+                )
+                return
+            }
+
+            _ = targetPID
+            PasteSynthesizer.simulateCmdC()
+            self.resolveFallbackSelectionCopy(
+                previousChangeCount: previousChangeCount,
+                previousClipboardString: previousClipboardString,
+                feedbackMessage: feedbackMessage,
+                attemptsRemaining: 5,
+                transform: transform
+            )
+        }
+    }
+
+    private func areModifierKeysStillPressed() -> Bool {
+        let keyCodes: [CGKeyCode] = [
+            CGKeyCode(kVK_Command),
+            CGKeyCode(kVK_RightCommand),
+            CGKeyCode(kVK_Shift),
+            CGKeyCode(kVK_RightShift),
+            CGKeyCode(kVK_Option),
+            CGKeyCode(kVK_RightOption),
+            CGKeyCode(kVK_Control),
+            CGKeyCode(kVK_RightControl)
+        ]
+        return keyCodes.contains { CGEventSource.keyState(.combinedSessionState, key: $0) }
+    }
+
+    private func resolveFallbackSelectionCopy(
+        previousChangeCount: Int,
+        previousClipboardString: String?,
+        feedbackMessage: String,
+        attemptsRemaining: Int,
+        transform: @escaping (String) -> String
+    ) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) { [weak self] in
+            guard let self else { return }
+            let pasteboard = NSPasteboard.general
+            let currentString = pasteboard.string(forType: .string)
+            if pasteboard.changeCount != previousChangeCount,
+               let selectedText = currentString,
+               !selectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                self.copyTextToClipboard(
+                    transform(selectedText),
+                    feedbackMessage: feedbackMessage,
+                    forceFloatingFeedback: true,
+                    storeInHistory: true,
+                    feedbackStyle: self.floatingFeedbackStyle(for: feedbackMessage)
+                )
+                return
+            }
+
+            if attemptsRemaining == 0,
+               let currentString,
+               let previousClipboardString,
+               currentString == previousClipboardString,
+               !currentString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                self.copyTextToClipboard(
+                    transform(currentString),
+                    feedbackMessage: feedbackMessage,
+                    forceFloatingFeedback: true,
+                    storeInHistory: true,
+                    feedbackStyle: self.floatingFeedbackStyle(for: feedbackMessage)
+                )
+                return
+            }
+
+            guard attemptsRemaining > 0 else {
+                NSSound.beep()
+                return
+            }
+
+            self.resolveFallbackSelectionCopy(
+                previousChangeCount: previousChangeCount,
+                previousClipboardString: previousClipboardString,
+                feedbackMessage: feedbackMessage,
+                attemptsRemaining: attemptsRemaining - 1,
+                transform: transform
+            )
+        }
     }
     
     private func pasteSelectedItem(_ item: ClipboardItem) {
+        if item.type == .text, let text = dataManager.resolvedText(for: item) {
+            pasteTextToFrontApp(text)
+            return
+        }
+
         copyToClipboard(item)
-        let targetPID = previouslyActiveApp?.processIdentifier
-        
+        let targetApp = resolvedPasteTargetApp()
+
         closePanelAndReactivate()
-        
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            self.reactivatePreviouslyActiveApp()
-            PasteSynthesizer.simulateCmdV(targetPID: targetPID)
+            if let targetApp {
+                self.activateTargetApp(targetApp)
+            } else {
+                self.reactivatePreviouslyActiveApp()
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                PasteSynthesizer.simulateCmdV()
+            }
+        }
+    }
+
+    private func activateCurrentApp() {
+        NSApp.unhide(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
+    }
+
+    private func promoteAppForExternalEditorIfNeeded() {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.unhide(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func restoreAccessoryActivationPolicyIfNeeded() {
+        guard noteEditorExternalFileURL == nil else { return }
+        NSApp.setActivationPolicy(.accessory)
+    }
+
+    private func activateTargetApp(_ app: NSRunningApplication) {
+        if #available(macOS 14.0, *) {
+            NSApp.yieldActivation(to: app)
+            _ = app.activate()
+        } else {
+            app.activate(options: [.activateIgnoringOtherApps])
         }
     }
     
@@ -508,7 +1267,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         if panel.isVisible,
            let item = highlightedPanelItem,
            item.type == .text,
-           let text = item.textContent,
+           let text = dataManager.resolvedText(for: item),
            !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return text
         }
@@ -745,6 +1504,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         if targetPID == previouslyActiveApp?.processIdentifier {
             return previouslyActiveApp
         }
+        return nil
+    }
+
+    private func currentPlacementTargetApp() -> NSRunningApplication? {
+        if let windowOwnerApp = frontmostWindowOwnerApp() {
+            return windowOwnerApp
+        }
+        return preferredPlacementTargetApp()
+    }
+
+    func currentPasteTargetAppName() -> String? {
+        resolvedPasteTargetApp()?.localizedName ?? currentPlacementTargetApp()?.localizedName
+    }
+
+    private func resolvedPasteTargetApp() -> NSRunningApplication? {
+        if let previous = previouslyActiveApp,
+           previous != NSRunningApplication.current,
+           !previous.isTerminated {
+            return previous
+        }
+
+        if let placement = placementTargetApp,
+           placement != NSRunningApplication.current,
+           !placement.isTerminated {
+            return placement
+        }
+
+        return currentPlacementTargetApp()
+    }
+
+    private func frontmostWindowOwnerApp() -> NSRunningApplication? {
+        let currentPID = NSRunningApplication.current.processIdentifier
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        guard let windowList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+            return nil
+        }
+
+        for windowInfo in windowList {
+            guard let ownerPID = windowInfo[kCGWindowOwnerPID as String] as? pid_t,
+                  ownerPID != currentPID,
+                  let layer = windowInfo[kCGWindowLayer as String] as? Int,
+                  layer == 0,
+                  let alpha = windowInfo[kCGWindowAlpha as String] as? Double,
+                  alpha > 0,
+                  let ownerName = windowInfo[kCGWindowOwnerName as String] as? String,
+                  !ownerName.isEmpty else {
+                continue
+            }
+
+            if let app = NSRunningApplication(processIdentifier: ownerPID), !app.isTerminated {
+                return app
+            }
+        }
+
         return nil
     }
 
@@ -1378,6 +2191,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         )
     }
 
+    private func hasPersistedPanelSize() -> Bool {
+        let defaults = UserDefaults.standard
+        return defaults.object(forKey: WindowDefaultsKey.width) != nil
+            || defaults.object(forKey: WindowDefaultsKey.height) != nil
+    }
+
     private func persistPanelSize(_ size: NSSize) {
         UserDefaults.standard.set(Double(size.width), forKey: WindowDefaultsKey.width)
         UserDefaults.standard.set(Double(size.height), forKey: WindowDefaultsKey.height)
@@ -1386,9 +2205,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         settingsStore.save(settings)
     }
 
+    private func mutateSettings(_ mutate: (inout AppSettings) -> Void) {
+        var updated = settings
+        mutate(&updated)
+        settings = updated
+    }
+
     func updateSettingsLanguage(_ language: SettingsLanguage) {
         guard settings.settingsLanguage != language else { return }
-        settings.settingsLanguage = language
+        mutateSettings { $0.settingsLanguage = language }
+        saveSettings()
+    }
+
+    func increaseInterfaceZoom() {
+        updateInterfaceZoom(settings.interfaceZoomScale + 0.1)
+    }
+
+    func decreaseInterfaceZoom() {
+        updateInterfaceZoom(settings.interfaceZoomScale - 0.1)
+    }
+
+    func resetInterfaceZoom() {
+        updateInterfaceZoom(AppSettings.defaultInterfaceZoomScale)
+    }
+
+    private func updateInterfaceZoom(_ proposedScale: Double) {
+        let clamped = min(AppSettings.maxInterfaceZoomScale, max(AppSettings.minInterfaceZoomScale, proposedScale))
+        guard abs(settings.interfaceZoomScale - clamped) > 0.001 else { return }
+        mutateSettings { $0.interfaceZoomScale = clamped }
         saveSettings()
     }
 
@@ -1398,19 +2242,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     }
 
     private func validateShortcutScopes(in draft: AppSettings) throws {
-        let globalShortcuts = [
+        let baseGlobalShortcuts = [
             draft.panelShortcut,
             draft.translationShortcut
-        ]
+        ] + [
+            draft.globalNewNoteShortcut
+        ].compactMap { $0 }
+        let enabledGlobalCopyShortcuts = [
+            draft.globalCopyJoinedEnabled ? draft.globalCopyJoinedShortcut : nil,
+            draft.globalCopyNormalizedEnabled ? draft.globalCopyNormalizedShortcut : nil
+        ].compactMap { $0 }
+        let globalShortcuts = baseGlobalShortcuts + enabledGlobalCopyShortcuts
         let standardPanelShortcuts = [
+            draft.newNoteShortcut,
             draft.togglePinShortcut,
             draft.togglePinnedAreaShortcut,
             draft.editTextShortcut,
             draft.deleteItemShortcut,
             draft.undoShortcut,
             draft.redoShortcut,
-            draft.joinLinesShortcut,
-            draft.normalizeForCommandShortcut
+            draft.copyJoinedShortcut,
+            draft.copyNormalizedShortcut
         ]
         let editorShortcuts = [
             draft.commitEditShortcut,
@@ -1418,6 +2270,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             draft.outdentShortcut,
             draft.moveLineUpShortcut,
             draft.moveLineDownShortcut,
+            draft.toggleMarkdownPreviewShortcut,
             draft.joinLinesShortcut,
             draft.normalizeForCommandShortcut
         ]
@@ -1427,6 +2280,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
               shortcutsAreUnique(editorShortcuts) else {
             throw SettingsMutationError.duplicateShortcut
         }
+
+        let localShortcuts = standardPanelShortcuts + editorShortcuts
+        let localIdentifiers = Set(localShortcuts.map { "\($0.keyCode):\($0.modifiers)" })
+        let exemptGlobalIdentifiers = Set([
+            draft.globalCopyJoinedEnabled ? draft.globalCopyJoinedShortcut : nil,
+            draft.globalCopyNormalizedEnabled ? draft.globalCopyNormalizedShortcut : nil
+        ].compactMap { $0 }.map { "\($0.keyCode):\($0.modifiers)" })
+
+        if globalShortcuts.contains(where: {
+            let identifier = "\($0.keyCode):\($0.modifiers)"
+            return !exemptGlobalIdentifiers.contains(identifier) && localIdentifiers.contains(identifier)
+        }) {
+            throw SettingsMutationError.duplicateShortcut
+        }
     }
 
     func applySettingsDraft(_ draft: AppSettings) throws {
@@ -1434,43 +2301,145 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
 
         try validateGlobalHotKeyAvailability(
             panelShortcut: draft.panelShortcut,
-            translationShortcut: draft.translationShortcut
+            translationShortcut: draft.translationShortcut,
+            additionalShortcuts: [
+                ("New Note", draft.globalNewNoteShortcut),
+                ("Copy Joined", draft.globalCopyJoinedEnabled ? draft.globalCopyJoinedShortcut : nil),
+                ("Copy Normalized", draft.globalCopyNormalizedEnabled ? draft.globalCopyNormalizedShortcut : nil)
+            ]
         )
 
         if settings.launchAtLogin != draft.launchAtLogin {
             try updateLaunchAtLogin(draft.launchAtLogin)
         }
 
-        settings.settingsLanguage = draft.settingsLanguage
-        settings.translationTargetLanguage = SupportedTranslationLanguages.contains(code: draft.translationTargetLanguage)
+        let sanitizedTranslationTarget = SupportedTranslationLanguages.contains(code: draft.translationTargetLanguage)
             ? draft.translationTargetLanguage
             : settings.translationTargetLanguage
-        settings.historyLimit = max(1, draft.historyLimit)
-        settings.togglePinShortcut = draft.togglePinShortcut
-        settings.togglePinnedAreaShortcut = draft.togglePinnedAreaShortcut
-        settings.editTextShortcut = draft.editTextShortcut
-        settings.commitEditShortcut = draft.commitEditShortcut
-        settings.deleteItemShortcut = draft.deleteItemShortcut
-        settings.undoShortcut = draft.undoShortcut
-        settings.redoShortcut = draft.redoShortcut
-        settings.indentShortcut = draft.indentShortcut
-        settings.outdentShortcut = draft.outdentShortcut
-        settings.moveLineUpShortcut = draft.moveLineUpShortcut
-        settings.moveLineDownShortcut = draft.moveLineDownShortcut
-        settings.joinLinesShortcut = draft.joinLinesShortcut
-        settings.normalizeForCommandShortcut = draft.normalizeForCommandShortcut
-        dataManager?.updateMaxHistoryItems(settings.historyLimit)
+        let sanitizedHistoryLimit = max(1, draft.historyLimit)
+        let previousSettings = settings
+
+        mutateSettings { settings in
+            settings.settingsLanguage = draft.settingsLanguage
+            settings.translationTargetLanguage = sanitizedTranslationTarget
+            settings.historyLimit = sanitizedHistoryLimit
+            settings.globalNewNoteShortcut = draft.globalNewNoteShortcut
+            settings.globalCopyJoinedShortcut = draft.globalCopyJoinedShortcut
+            settings.globalCopyNormalizedShortcut = draft.globalCopyNormalizedShortcut
+            settings.globalCopyJoinedEnabled = draft.globalCopyJoinedEnabled
+            settings.globalCopyNormalizedEnabled = draft.globalCopyNormalizedEnabled
+            settings.newNoteShortcut = draft.newNoteShortcut
+            settings.togglePinShortcut = draft.togglePinShortcut
+            settings.togglePinnedAreaShortcut = draft.togglePinnedAreaShortcut
+            settings.editTextShortcut = draft.editTextShortcut
+            settings.commitEditShortcut = draft.commitEditShortcut
+            settings.deleteItemShortcut = draft.deleteItemShortcut
+            settings.undoShortcut = draft.undoShortcut
+            settings.redoShortcut = draft.redoShortcut
+            settings.indentShortcut = draft.indentShortcut
+            settings.outdentShortcut = draft.outdentShortcut
+            settings.moveLineUpShortcut = draft.moveLineUpShortcut
+            settings.moveLineDownShortcut = draft.moveLineDownShortcut
+            settings.copyJoinedShortcut = draft.copyJoinedShortcut
+            settings.copyNormalizedShortcut = draft.copyNormalizedShortcut
+            settings.toggleMarkdownPreviewShortcut = draft.toggleMarkdownPreviewShortcut
+            settings.joinLinesShortcut = draft.joinLinesShortcut
+            settings.normalizeForCommandShortcut = draft.normalizeForCommandShortcut
+            settings.interfaceZoomScale = draft.clampedInterfaceZoomScale
+            settings.newNoteReopenBehavior = draft.newNoteReopenBehavior
+            settings.interfaceThemePreset = draft.interfaceThemePreset
+        }
+        dataManager?.updateMaxHistoryItems(sanitizedHistoryLimit)
 
         applyPanelShortcut(draft.panelShortcut)
         applyTranslationShortcut(draft.translationShortcut)
         saveSettings()
+        refreshVisibleWindowsAfterApplyingSettings(from: previousSettings, to: settings)
+    }
+
+    private func refreshVisibleWindowsAfterApplyingSettings(from previousSettings: AppSettings, to currentSettings: AppSettings) {
+        let shouldRebuildVisibleWindows =
+            previousSettings.interfaceThemePreset != currentSettings.interfaceThemePreset ||
+            abs(previousSettings.clampedInterfaceZoomScale - currentSettings.clampedInterfaceZoomScale) > 0.001 ||
+            previousSettings.settingsLanguage != currentSettings.settingsLanguage
+
+        guard shouldRebuildVisibleWindows else { return }
+
+        let panelWasVisible = panel.isVisible
+        let panelFrame = panel.frame
+        let helpWasVisible = helpPanel?.isVisible == true
+        let settingsWasVisible = settingsWindowController?.window?.isVisible == true
+        let noteWasVisible = noteEditorWindowController?.window?.isVisible == true
+        let noteFrame = noteEditorWindowController?.window?.frame
+        let noteItemID = noteEditorItemID
+        let noteDraft = noteEditorDraftText
+
+        if let itemID = noteItemID, noteWasVisible {
+            _ = dataManager.updateTextContent(noteDraft, for: itemID)
+        }
+
+        if panelWasVisible {
+            panel.orderOut(nil)
+            panel.contentView = NSHostingView(rootView: makePanelRootView())
+        }
+
+        if let helpPanel,
+           let hostingController = helpPanel.contentViewController as? NSHostingController<ClipboardHelpPanelContent> {
+            helpPanel.orderOut(nil)
+            hostingController.rootView = ClipboardHelpPanelContent(
+                settings: settings,
+                isEditingSelectedText: false,
+                onClose: { [weak self] in
+                    self?.closeHelpPanel(refocusClipboardPanel: true)
+                }
+            )
+        }
+
+        if settingsWasVisible, let settingsWindow = settingsWindowController?.window {
+            settingsWindow.orderOut(nil)
+            let rootView = SettingsView(appDelegate: self)
+                .modelContainer(sharedContainer)
+            settingsWindow.contentViewController = NSHostingController(rootView: rootView)
+        }
+
+        if noteWasVisible, let itemID = noteItemID {
+            noteEditorWindowController?.window?.orderOut(nil)
+            noteEditorWindowController = nil
+            noteEditorItemID = itemID
+            noteEditorDraftText = noteDraft
+            let controller = makeNoteEditorWindowController(itemID: itemID)
+            if let noteFrame, let window = controller.window {
+                window.setFrame(noteFrame, display: false)
+            }
+        }
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if panelWasVisible {
+                self.panel.setFrame(panelFrame, display: false)
+                self.panel.orderFrontRegardless()
+                self.panel.makeKeyAndOrderFront(nil)
+            }
+            if helpWasVisible {
+                self.showHelpPanel(isEditingSelectedText: false)
+            }
+            if settingsWasVisible {
+                self.settingsWindowController?.showWindow(nil)
+                self.settingsWindowController?.window?.makeKeyAndOrderFront(nil)
+            }
+            if noteWasVisible {
+                self.noteEditorWindowController?.showWindow(nil)
+                self.noteEditorWindowController?.window?.orderFront(nil)
+                self.noteEditorWindowController?.window?.makeKeyAndOrderFront(nil)
+            }
+        }
     }
 
     func updateHistoryLimit(_ historyLimit: Int) {
         let sanitizedLimit = max(1, historyLimit)
         guard settings.historyLimit != sanitizedLimit else { return }
 
-        settings.historyLimit = sanitizedLimit
+        mutateSettings { $0.historyLimit = sanitizedLimit }
         dataManager?.updateMaxHistoryItems(sanitizedLimit)
         saveSettings()
     }
@@ -1479,7 +2448,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         guard SupportedTranslationLanguages.contains(code: languageCode) else { return }
         guard settings.translationTargetLanguage != languageCode else { return }
 
-        settings.translationTargetLanguage = languageCode
+        mutateSettings { $0.translationTargetLanguage = languageCode }
         saveSettings()
     }
 
@@ -1516,7 +2485,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
 
             if isEnabled {
                 if status == .enabled || status == .requiresApproval {
-                    settings.launchAtLogin = true
+                    mutateSettings { $0.launchAtLogin = true }
                     saveSettings()
                     return
                 }
@@ -1527,7 +2496,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
                 }
             } else {
                 if status == .notRegistered {
-                    settings.launchAtLogin = false
+                    mutateSettings { $0.launchAtLogin = false }
                     saveSettings()
                     return
                 }
@@ -1538,7 +2507,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
                 }
             }
 
-            settings.launchAtLogin = isEnabled
+            mutateSettings { $0.launchAtLogin = isEnabled }
             saveSettings()
             return
         }
@@ -1547,13 +2516,134 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     }
 
     func openSettingsWindow() {
-        suppressPanelAutoClose = true
+        let panelWasVisible = panel.isVisible
+        suppressPanelAutoClose = panelWasVisible
         suspendGlobalHotKeys()
         NSApp.activate(ignoringOtherApps: true)
         let controller = makeSettingsWindowController()
+        if let window = controller.window {
+            let desiredFrame: NSRect
+            if panelWasVisible {
+                let screen = screen(containing: panel.frame) ?? panel.screen ?? NSScreen.main
+                let visibleFrame = (screen?.visibleFrame ?? window.frame).insetBy(dx: Layout.screenMargin, dy: Layout.screenMargin)
+                desiredFrame = Self.auxiliaryWindowPlacement(
+                    anchorFrame: panel.frame,
+                    visibleFrame: visibleFrame,
+                    windowSize: window.frame.size,
+                    gap: 16
+                )
+            } else {
+                let screen = NSScreen.main
+                let visibleFrame = (screen?.visibleFrame ?? window.frame).insetBy(dx: Layout.screenMargin, dy: Layout.screenMargin)
+                desiredFrame = NSRect(
+                    x: visibleFrame.midX - (window.frame.width / 2),
+                    y: visibleFrame.midY - (window.frame.height / 2),
+                    width: window.frame.width,
+                    height: window.frame.height
+                )
+            }
+            window.setFrame(desiredFrame, display: false)
+        }
+        controller.showWindow(nil)
+        controller.window?.makeKeyAndOrderFront(nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            self?.suppressPanelAutoClose = false
+        }
+    }
+
+    func openStandaloneNoteEditor(for itemID: UUID) {
+        if noteEditorExternalFileURL != nil,
+           noteEditorWindowController?.window?.isVisible == true {
+            dismissStandaloneNoteEditorWindow(copyToClipboard: false)
+        }
+        if let currentItemID = noteEditorItemID,
+           currentItemID != itemID {
+            finalizeNoteEditorSession(copyToClipboard: false)
+        }
+        suppressPanelAutoClose = true
+        NSApp.activate(ignoringOtherApps: true)
+        let controller = makeNoteEditorWindowController(itemID: itemID)
+        if let window = controller.window {
+            let referenceFrame = panel.isVisible ? panel.frame : window.frame
+            let screen = screen(containing: referenceFrame) ?? panel.screen ?? window.screen ?? NSScreen.main
+            let visibleFrame = (screen?.visibleFrame ?? window.frame).insetBy(dx: Layout.screenMargin, dy: Layout.screenMargin)
+            let desiredFrame = Self.auxiliaryWindowPlacement(
+                anchorFrame: referenceFrame,
+                visibleFrame: visibleFrame,
+                windowSize: window.frame.size,
+                gap: 16
+            )
+            window.setFrame(desiredFrame, display: false)
+        }
         controller.showWindow(nil)
         controller.window?.orderFrontRegardless()
         controller.window?.makeKeyAndOrderFront(nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            self?.suppressPanelAutoClose = false
+        }
+    }
+
+    private func openExternalCodexEditor(for fileURL: URL) {
+        let standardizedURL = fileURL.standardizedFileURL
+        do {
+            try FileManager.default.createDirectory(
+                at: standardizedURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            if !FileManager.default.fileExists(atPath: standardizedURL.path) {
+                try "".write(to: standardizedURL, atomically: true, encoding: .utf8)
+            }
+        } catch {
+            return
+        }
+
+        if let currentURL = noteEditorExternalFileURL,
+           currentURL == standardizedURL,
+           let window = noteEditorWindowController?.window,
+           window.isVisible {
+            activateCurrentApp()
+            noteEditorWindowController?.showWindow(nil)
+            window.orderFront(nil)
+            window.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        if noteEditorWindowController?.window?.isVisible == true {
+            dismissStandaloneNoteEditorWindow(copyToClipboard: false)
+        }
+
+        noteEditorExternalFileURL = standardizedURL
+        noteEditorCompletionMarkerURL = codexCompletionMarkerURL(for: standardizedURL)
+        noteEditorItemID = nil
+        noteEditorDraftText = (try? String(contentsOf: standardizedURL, encoding: .utf8)) ?? ""
+        noteEditorShouldCommitExternalDraft = false
+
+        suppressPanelAutoClose = true
+        promoteAppForExternalEditorIfNeeded()
+        NSApp.unhide(nil)
+        activateCurrentApp()
+        let controller = makeExternalFileEditorWindowController(fileURL: standardizedURL)
+        if let window = controller.window {
+            if panel.isVisible {
+                let referenceFrame = panel.frame
+                let screen = screen(containing: referenceFrame) ?? panel.screen ?? window.screen ?? NSScreen.main
+                let visibleFrame = (screen?.visibleFrame ?? window.frame).insetBy(dx: Layout.screenMargin, dy: Layout.screenMargin)
+                let desiredFrame = Self.auxiliaryWindowPlacement(
+                    anchorFrame: referenceFrame,
+                    visibleFrame: visibleFrame,
+                    windowSize: window.frame.size,
+                    gap: 16
+                )
+                window.setFrame(desiredFrame, display: false)
+            } else {
+                window.center()
+            }
+        }
+        controller.showWindow(nil)
+        controller.window?.orderFrontRegardless()
+        controller.window?.makeKeyAndOrderFront(nil)
+        NSApp.unhide(nil)
+        NSApp.activate(ignoringOtherApps: true)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
             self?.suppressPanelAutoClose = false
         }
@@ -1580,7 +2670,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         window.setContentSize(NSSize(width: 580, height: 470))
         window.center()
         window.isReleasedWhenClosed = false
-        window.level = .floating
+        window.level = .normal
 
         let controller = NSWindowController(window: window)
         if settingsWindowCloseObserver == nil {
@@ -1597,10 +2687,399 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         return controller
     }
 
+    private enum FloatingFeedbackStyle {
+        case copy
+        case joined
+        case normalized
+
+        var backgroundColor: NSColor {
+            switch self {
+            case .copy:
+                return NSColor(calibratedRed: 0.77, green: 0.60, blue: 0.14, alpha: 0.97)
+            case .joined:
+                return NSColor(calibratedRed: 0.76, green: 0.44, blue: 0.13, alpha: 0.97)
+            case .normalized:
+                return NSColor(calibratedRed: 0.19, green: 0.49, blue: 0.64, alpha: 0.97)
+            }
+        }
+    }
+
+    private func floatingFeedbackStyle(for message: String) -> FloatingFeedbackStyle {
+        switch message {
+        case "Joined", "Copied joined text":
+            return .joined
+        case "Normalized", "Copied normalized text":
+            return .normalized
+        default:
+            return .copy
+        }
+    }
+
+    private func showFloatingFeedback(message: String, style: FloatingFeedbackStyle) {
+        floatingFeedbackDismissTask?.cancel()
+
+        let panel = floatingFeedbackPanel ?? makeFloatingFeedbackPanel()
+        let displayMessage = message.hasSuffix("!") ? message : "\(message)!"
+        let fittedWidth = floatingFeedbackWidth(for: displayMessage)
+        let panelSize = NSSize(width: fittedWidth, height: 30)
+        if let rootView = floatingFeedbackRootView {
+            rootView.frame = NSRect(x: 0, y: 0, width: fittedWidth, height: 30)
+        }
+        if let label = floatingFeedbackLabel {
+            label.stringValue = displayMessage
+            label.frame = NSRect(x: 10, y: 6, width: fittedWidth - 20, height: 18)
+        }
+        if let backgroundView = floatingFeedbackBackgroundView {
+            backgroundView.layer?.backgroundColor = style.backgroundColor.cgColor
+            backgroundView.frame = NSRect(x: 0, y: 0, width: fittedWidth, height: 30)
+        }
+
+        panel.setContentSize(panelSize)
+        panel.setFrame(floatingFeedbackFrame(for: panelSize), display: false)
+        panel.orderFrontRegardless()
+
+        let dismissTask = DispatchWorkItem { [weak self] in
+            self?.floatingFeedbackPanel?.orderOut(nil)
+            self?.floatingFeedbackDismissTask = nil
+        }
+        floatingFeedbackDismissTask = dismissTask
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: dismissTask)
+    }
+
+    private func makeFloatingFeedbackPanel() -> NSPanel {
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 128, height: 30),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.level = .statusBar
+        panel.ignoresMouseEvents = true
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.hidesOnDeactivate = false
+
+        let rootView = NSView(frame: NSRect(x: 0, y: 0, width: 128, height: 30))
+        rootView.wantsLayer = true
+
+        let backgroundView = NSView(frame: rootView.bounds)
+        backgroundView.autoresizingMask = [.width, .height]
+        backgroundView.wantsLayer = true
+        backgroundView.layer?.cornerRadius = 15
+        backgroundView.layer?.masksToBounds = true
+        rootView.addSubview(backgroundView)
+
+        let label = NSTextField(labelWithString: "")
+        label.frame = NSRect(x: 10, y: 6, width: 108, height: 18)
+        label.autoresizingMask = [.width]
+        label.alignment = .center
+        label.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
+        label.textColor = NSColor.white
+        label.lineBreakMode = .byClipping
+        backgroundView.addSubview(label)
+
+        panel.contentView = rootView
+        floatingFeedbackRootView = rootView
+        floatingFeedbackBackgroundView = backgroundView
+        floatingFeedbackLabel = label
+        floatingFeedbackPanel = panel
+        return panel
+    }
+
+    private func floatingFeedbackWidth(for message: String) -> CGFloat {
+        let font = NSFont.systemFont(ofSize: 12, weight: .semibold)
+        let attributes: [NSAttributedString.Key: Any] = [.font: font]
+        let measuredWidth = ceil((message as NSString).size(withAttributes: attributes).width)
+        return min(max(measuredWidth + 28, 100), 220)
+    }
+
+    private func floatingFeedbackFrame(for size: NSSize) -> NSRect {
+        let targetApp = NSWorkspace.shared.frontmostApplication
+        let targetFrame = frontmostWindowFrame(for: targetApp)
+        let screen = targetFrame.flatMap(screen(containing:)) ?? NSScreen.main
+        let visibleFrame = screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
+        let referenceFrame = targetFrame ?? visibleFrame
+
+        let x = clamped(referenceFrame.midX - (size.width / 2), min: visibleFrame.minX + 10, max: visibleFrame.maxX - size.width - 10)
+        let preferredY = referenceFrame.minY + 18
+        let y = clamped(preferredY, min: visibleFrame.minY + 12, max: visibleFrame.maxY - size.height - 12)
+        return NSRect(x: x, y: y, width: size.width, height: size.height)
+    }
+
+    private func makeNoteEditorWindowController(itemID: UUID) -> NSWindowController {
+        noteEditorItemID = itemID
+        noteEditorExternalFileURL = nil
+        noteEditorCompletionMarkerURL = nil
+        noteEditorShouldCommitExternalDraft = false
+        let initialText = dataManager.loadWorkingNoteText(for: itemID)
+            ?? dataManager.allItems().first(where: { $0.id == itemID }).flatMap(dataManager.resolvedText(for:))
+            ?? ""
+        noteEditorDraftText = initialText
+        _ = dataManager.saveWorkingNoteText(initialText, for: itemID)
+
+        let rootView = StandaloneNoteEditorView(
+            initialText: initialText,
+            appDelegate: self,
+            commitMode: .pasteToTarget,
+            onDraftChange: { [weak self] text in
+                self?.noteEditorDraftText = text
+                self?.scheduleNoteEditorAutosave(itemID: itemID, text: text)
+            },
+            onCommit: { [weak self] text in
+                self?.commitManualNoteDraft(text, for: itemID)
+            },
+            onClose: { [weak self] in
+                self?.closeStandaloneNoteEditor()
+            }
+        )
+        .modelContainer(sharedContainer)
+
+        let hostingController = NSHostingController(rootView: rootView)
+
+        let window = NSWindow(contentViewController: hostingController)
+        window.title = "New Note"
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window.setContentSize(NSSize(width: 720, height: 420))
+        window.contentMinSize = NSSize(width: 620, height: 320)
+        window.isReleasedWhenClosed = false
+        window.level = .normal
+        window.representedURL = dataManager.workingNoteFileURL(for: itemID)
+        window.delegate = self
+        window.standardWindowButton(.closeButton)?.target = self
+        window.standardWindowButton(.closeButton)?.action = #selector(handleNoteEditorCloseButton(_:))
+
+        let controller = NSWindowController(window: window)
+        noteEditorWindowController = controller
+        return controller
+    }
+
+    private func makeExternalFileEditorWindowController(fileURL: URL) -> NSWindowController {
+        noteEditorItemID = nil
+        noteEditorExternalFileURL = fileURL
+        noteEditorCompletionMarkerURL = codexCompletionMarkerURL(for: fileURL)
+        noteEditorShouldCommitExternalDraft = false
+        let initialText = (try? String(contentsOf: fileURL, encoding: .utf8)) ?? ""
+        noteEditorDraftText = initialText
+
+        let rootView = StandaloneNoteEditorView(
+            initialText: initialText,
+            appDelegate: self,
+            commitMode: .returnToCodex,
+            onDraftChange: { [weak self] text in
+                self?.noteEditorDraftText = text
+            },
+            onCommit: { [weak self] text in
+                self?.commitExternalCodexDraft(text, fileURL: fileURL)
+            },
+            onClose: { [weak self] in
+                self?.closeStandaloneNoteEditor()
+            }
+        )
+        .modelContainer(sharedContainer)
+
+        let hostingController = NSHostingController(rootView: rootView)
+
+        let window = NSWindow(contentViewController: hostingController)
+        window.title = fileURL.lastPathComponent
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window.setContentSize(NSSize(width: 720, height: 420))
+        window.contentMinSize = NSSize(width: 620, height: 320)
+        window.isReleasedWhenClosed = false
+        window.level = .normal
+        window.representedURL = fileURL
+        window.delegate = self
+        window.standardWindowButton(.closeButton)?.target = self
+        window.standardWindowButton(.closeButton)?.action = #selector(handleNoteEditorCloseButton(_:))
+
+        let controller = NSWindowController(window: window)
+        noteEditorWindowController = controller
+        return controller
+    }
+
+    private func closeStandaloneNoteEditor() {
+        dismissStandaloneNoteEditorWindow(copyToClipboard: noteEditorExternalFileURL == nil)
+    }
+
+    private func finalizeNoteEditorSession(copyToClipboard: Bool) {
+        if let externalFileURL = noteEditorExternalFileURL {
+            let finalText = noteEditorDraftText
+            _ = saveExternalEditorText(finalText, to: externalFileURL)
+            if let completionMarkerURL = noteEditorCompletionMarkerURL {
+                signalCodexCompletionMarker(at: completionMarkerURL)
+            }
+            return
+        }
+        guard let itemID = noteEditorItemID else {
+            return
+        }
+
+        let finalText = noteEditorDraftText
+        _ = dataManager.updateTextContent(finalText, for: itemID)
+        _ = dataManager.saveWorkingNoteText(finalText, for: itemID)
+
+        if copyToClipboard {
+            copyTextToClipboard(finalText, feedbackMessage: "Copied")
+        }
+    }
+
+    private func persistClosedNoteEditorDraft(itemID: UUID?, finalText: String, copyToClipboard: Bool) {
+        guard let itemID else {
+            return
+        }
+
+        _ = dataManager.updateTextContent(finalText, for: itemID)
+        _ = dataManager.saveWorkingNoteText(finalText, for: itemID)
+
+        if copyToClipboard,
+           !finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            copyTextToClipboard(finalText, feedbackMessage: "Copied")
+        }
+    }
+
+    @objc
+    private func handleNoteEditorCloseButton(_ sender: Any?) {
+        dismissStandaloneNoteEditorWindow(copyToClipboard: noteEditorExternalFileURL == nil)
+    }
+
+    private func dismissStandaloneNoteEditorWindow(copyToClipboard: Bool) {
+        guard let controller = noteEditorWindowController,
+              let window = controller.window else {
+            return
+        }
+
+        let itemID = noteEditorItemID
+        let externalFileURL = noteEditorExternalFileURL
+        let completionMarkerURL = noteEditorCompletionMarkerURL
+        let shouldCommitExternalDraft = noteEditorShouldCommitExternalDraft
+        let finalText = noteEditorDraftText
+        noteEditorAutosaveWorkItem?.cancel()
+        noteEditorAutosaveWorkItem = nil
+        lastClosedNoteEditorItemID = itemID
+        noteEditorItemID = nil
+        noteEditorExternalFileURL = nil
+        noteEditorCompletionMarkerURL = nil
+        noteEditorShouldCommitExternalDraft = false
+        noteEditorDraftText = ""
+        noteEditorWindowController = nil
+
+        window.contentViewController = NSViewController()
+        window.orderOut(nil)
+
+        DispatchQueue.main.async { [weak self] in
+            if let externalFileURL {
+                switch Self.externalEditorCloseOutcome(commitRequested: shouldCommitExternalDraft) {
+                case .persistAndSignal:
+                    _ = self?.saveExternalEditorText(finalText, to: externalFileURL)
+                    if let completionMarkerURL {
+                        self?.signalCodexCompletionMarker(at: completionMarkerURL)
+                    }
+                case .signalOnly:
+                    if let completionMarkerURL {
+                        self?.signalCodexCompletionMarker(at: completionMarkerURL)
+                    }
+                }
+                self?.restoreAccessoryActivationPolicyIfNeeded()
+            } else {
+                self?.persistClosedNoteEditorDraft(itemID: itemID, finalText: finalText, copyToClipboard: copyToClipboard)
+            }
+            self?.registerHotKeys()
+        }
+    }
+
+    private func scheduleNoteEditorAutosave(itemID: UUID, text: String) {
+        noteEditorAutosaveWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            _ = self.dataManager.updateTextContent(text, for: itemID)
+            _ = self.dataManager.saveWorkingNoteText(text, for: itemID)
+            self.noteEditorAutosaveWorkItem = nil
+        }
+        noteEditorAutosaveWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.20, execute: workItem)
+    }
+
+    private func commitManualNoteDraft(_ text: String, for itemID: UUID) {
+        _ = dataManager.updateTextContent(text, for: itemID)
+        _ = dataManager.saveWorkingNoteText(text, for: itemID)
+        pasteTextToFrontApp(text)
+    }
+
+    private func commitExternalCodexDraft(_ text: String, fileURL: URL) {
+        noteEditorShouldCommitExternalDraft = true
+        _ = saveExternalEditorText(text, to: fileURL)
+        dismissStandaloneNoteEditorWindow(copyToClipboard: false)
+    }
+
+    @discardableResult
+    private func saveExternalEditorText(_ text: String, to fileURL: URL) -> Bool {
+        do {
+            try FileManager.default.createDirectory(
+                at: fileURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try text.write(to: fileURL, atomically: true, encoding: .utf8)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func codexCompletionMarkerURL(for fileURL: URL) -> URL {
+        let standardizedPath = fileURL.standardizedFileURL.path
+        let digest = SHA256.hash(data: Data(standardizedPath.utf8))
+        let hash = digest.map { String(format: "%02x", $0) }.joined()
+        let storePaths = ClipboardStorePaths.default()
+        try? storePaths.ensureDirectories()
+        return storePaths.codexCompletionDirectory.appendingPathComponent("\(hash).done")
+    }
+
+    private func signalCodexCompletionMarker(at markerURL: URL) {
+        do {
+            try FileManager.default.createDirectory(
+                at: markerURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try Data().write(to: markerURL, options: .atomic)
+        } catch {
+            return
+        }
+    }
+
+    enum ExternalEditorCloseOutcome: Equatable {
+        case persistAndSignal
+        case signalOnly
+    }
+
+    static func externalEditorCloseOutcome(commitRequested: Bool) -> ExternalEditorCloseOutcome {
+        commitRequested ? .persistAndSignal : .signalOnly
+    }
+
+    func codexIntegrationStatus(inspectShellConfig: Bool = false) -> CodexIntegrationStatus {
+        makeCodexIntegrationManager().status(inspectShellConfig: inspectShellConfig)
+    }
+
+    func installCodexIntegration() throws -> CodexIntegrationStatus {
+        try makeCodexIntegrationManager().install()
+    }
+
+    func removeCodexIntegration() throws -> CodexIntegrationStatus {
+        try makeCodexIntegrationManager().remove()
+    }
+
+    private func makeCodexIntegrationManager() -> CodexIntegrationManager {
+        CodexIntegrationManager(
+            storePaths: ClipboardStorePaths.default(),
+            shellPath: ProcessInfo.processInfo.environment["SHELL"] ?? "",
+            homeDirectory: FileManager.default.homeDirectoryForCurrentUser
+        )
+    }
+
     private func syncLaunchAtLoginState() {
         guard #available(macOS 13.0, *) else { return }
         let status = SMAppService.mainApp.status
-        settings.launchAtLogin = (status == .enabled || status == .requiresApproval)
+        mutateSettings { $0.launchAtLogin = (status == .enabled || status == .requiresApproval) }
         saveSettings()
     }
 
@@ -1614,7 +3093,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
 
     private func validateGlobalHotKeyAvailability(
         panelShortcut: HotKeyManager.Shortcut,
-        translationShortcut: HotKeyManager.Shortcut
+        translationShortcut: HotKeyManager.Shortcut,
+        additionalShortcuts: [(String, HotKeyManager.Shortcut?)] = []
     ) throws {
         suspendGlobalHotKeys()
         defer { registerHotKeys() }
@@ -1634,18 +3114,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         guard translationResult.isSuccess else {
             throw SettingsMutationError.unavailableShortcut("Translation: \(HotKeyManager.displayString(for: translationShortcut))")
         }
+
+        for (label, shortcut) in additionalShortcuts {
+            guard let shortcut else { continue }
+            let result = HotKeyManager.shared.registerDetailed(shortcut: shortcut) {}
+            if let registrationID = result.registrationID {
+                HotKeyManager.shared.unregister(registrationID: registrationID)
+            }
+            guard result.isSuccess else {
+                throw SettingsMutationError.unavailableShortcut("\(label): \(HotKeyManager.displayString(for: shortcut))")
+            }
+        }
     }
 
     private func applyPanelShortcut(_ shortcut: HotKeyManager.Shortcut) {
         panelHotKeyShortcut = shortcut
-        settings.panelShortcut = shortcut
+        mutateSettings { $0.panelShortcut = shortcut }
         saveSettings()
         registerHotKeys()
     }
 
     private func applyTranslationShortcut(_ shortcut: HotKeyManager.Shortcut) {
         translateHotKeyShortcut = shortcut
-        settings.translationShortcut = shortcut
+        mutateSettings { $0.translationShortcut = shortcut }
         saveSettings()
         registerHotKeys()
     }
@@ -1653,7 +3144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     @objc
     private func statusItemButtonClicked(_ sender: NSStatusBarButton) {
         guard let currentEvent = NSApp.currentEvent else {
-            togglePanel()
+            togglePanelFromStatusItem()
             return
         }
         
@@ -1662,7 +3153,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             return
         }
         
-        togglePanel()
+        togglePanelFromStatusItem()
+    }
+
+    private func togglePanelFromStatusItem() {
+        if isPanelFrontmost() {
+            closePanelAndReactivate()
+            return
+        }
+        showPanelFromStatusItem()
+    }
+
+    private func showPanelFromStatusItem() {
+        suppressPanelAutoClose = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.activateCurrentApp()
+            self.showPanel()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                self?.suppressPanelAutoClose = false
+            }
+        }
     }
     
     @objc
@@ -1678,6 +3189,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     @objc
     private func openSettingsFromMenu() {
         openSettingsWindow()
+    }
+
+    @objc
+    private func createNewNoteFromMenu() {
+        createNewNoteFromAnyState()
     }
     
     @objc

@@ -85,7 +85,7 @@ Additional UI constraints already chosen:
 - editor indent / outdent: Tab / Shift-Tab
 - editor line up / down: Option-Up / Option-Down
 - editor join lines: Command-J
-- editor normalize for command: Command-Shift-J
+- editor normalize: Command-Shift-J
 
 ## 3. Robustness
 
@@ -125,11 +125,79 @@ Initial robustness tasks:
 4. Strengthen duplicate detection and persistence invariants.
 5. Add automated tests for the high-risk cases above.
 
-## 4. Execution Order
+## 4. Test Specification Inventory
 
-1. Clean repository structure and confirm the project builds from source control.
-2. Freeze MVP scope.
-3. Refactor for testability.
-4. Add unit tests for pure logic and persistence rules.
-5. Add integration tests for pasteboard capture and startup/relaunch behavior.
-6. Add manual compatibility checklist and release checklist.
+The repository should treat the following as explicit test targets rather than informal behavior.
+
+### 4.1 Core data and persistence rules
+
+- history items are ordered by newest timestamp first
+- pinned items are ordered only by `pinOrder`
+- pinned items are excluded from ordinary history lists
+- pinning appends to the end of current pinned order
+- unpinning renormalizes remaining pinned order
+- pin labels are trimmed, persisted, and removable by empty input
+- deleting an item removes associated image files and pin labels
+- restoring a deleted item preserves timestamp, pin state, and pin label
+- text edits preserve original timestamp unless the operation explicitly requests recency bump
+- history trimming affects only unpinned history items
+- duplicate capture replaces unpinned duplicates but refuses to replace pinned duplicates
+
+### 4.2 Text editing rules
+
+- editor mode owns its own text-editing undo/redo behavior
+- panel shortcuts that reuse editor keys, especially `Tab`, must not leak into editor mode while text editing is active
+- indent / outdent operate on the selected lines
+- move line up / down preserves selection and line order correctly
+- join lines and normalize-for-command are undoable
+- normalize-for-command preserves line structure; join lines is the explicit newline-flattening command
+- clipboard-oriented commands do not corrupt editor state boundaries
+- commit, cancel, and help shortcuts must route to the editor correctly without stealing ordinary text-editing behavior
+- `⌘A`, `⌘C`, `⌘X`, `⌘V`, `⌘←→`, `⌥←→`, delete variants, and `Esc` behave compatibly enough with standard macOS text editing
+
+### 4.3 Panel workflow rules
+
+- Enter pastes the selected item into the currently active target app
+- changing target apps between panel invocations changes the actual paste target
+- panel-level undo/redo covers pin, delete, reorder, and non-editor text transforms
+- join / normalize in ordinary panel mode edit the selected stored item in place rather than creating a new newest item
+
+## 5. Complex Regression Workflows
+
+The repository should keep five high-complexity workflows that pass only when multiple subsystems cooperate correctly.
+
+1. Pinned delete / restore / transform workflow
+   - label, pin, reorder, delete, restore, restore pin state, and edit text while preserving order and timestamp invariants
+2. History trim and duplicate workflow
+   - pinned duplicate rejection, unpinned duplicate replacement, and max-history trimming in one scenario
+3. Image delete / restore workflow
+   - image file persistence, pin label persistence, delete cleanup, restore rehydration, and image loading
+4. Editor command round-trip workflow
+   - indent, move line, join, then multi-step undo/redo with exact text expectations
+5. Editor clipboard + normalize workflow
+   - cut, paste, normalize, then exact undo/redo boundary verification
+
+## 6. Diagnostic Breakdown Suites
+
+When a complex regression test fails, smaller suites should isolate the fault domain.
+
+- `ClipboardDataManagerBehaviorTests`
+  - ordering, pinning, trimming, deletion, restore, labels, duplicate handling
+- `EditorNSTextViewKeyboardTests`
+  - standard text-editing key behavior and editor command routing
+- `PanelKeyboardRoutingTests`
+  - panel/editor routing boundaries and help-command visibility metadata
+- `AppDelegateTargetSelectionTests`
+  - paste target selection and frontmost-app routing
+- smoke scripts
+  - `enter_paste_smoke.sh`
+  - `enter_paste_target_switch_smoke.sh`
+
+## 7. Execution Order
+
+1. Freeze the specification inventory above.
+2. Keep the five complex workflow regressions green.
+3. Keep the diagnostic breakdown suites narrow and fast.
+4. Run target-selection and paste smoke tests after panel routing changes.
+5. Run editor-keyboard tests after editor-command changes.
+6. Expand compatibility and release checks only after the workflow tests stay green.

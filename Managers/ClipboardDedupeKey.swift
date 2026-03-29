@@ -2,9 +2,20 @@ import CryptoKit
 import Foundation
 
 enum ClipboardDedupeKey {
+    private static let largeTextThreshold = 256 * 1024
+    private static let sampleChunkLength = 8192
+
     static func text(_ text: String) -> String {
-        let normalized = normalizedText(text)
-        return "txt:\(sha256Hex(for: Data(normalized.utf8)))"
+        let utf8Count = text.utf8.count
+        if utf8Count <= largeTextThreshold {
+            let normalized = normalizedText(text)
+            return "txt:\(sha256Hex(for: Data(normalized.utf8)))"
+        }
+
+        let prefixSample = normalizedText(String(text.prefix(sampleChunkLength)))
+        let suffixSample = normalizedText(String(text.suffix(sampleChunkLength)))
+        let fingerprint = "\(utf8Count)|\(prefixSample)|\(suffixSample)"
+        return "txt-large:\(sha256Hex(for: Data(fingerprint.utf8)))"
     }
 
     static func image(_ normalizedImageData: Data) -> String {
@@ -12,6 +23,10 @@ enum ClipboardDedupeKey {
     }
 
     static func forItem(_ item: ClipboardItem, imageDataLoader: (String) -> Data?) -> String? {
+        if let dedupeKey = item.dedupeKey, !dedupeKey.isEmpty {
+            return dedupeKey
+        }
+
         switch item.type {
         case .text:
             guard let textContent = item.textContent else {

@@ -47,4 +47,42 @@ class PasteSynthesizer {
             }
         }
     }
+
+    static func simulateCmdC(targetPID: pid_t? = nil) {
+        guard let source = CGEventSource(stateID: .hidSystemState) else {
+            print("Failed to create CGEventSource")
+            return
+        }
+
+        source.localEventsSuppressionInterval = 0
+
+        let commandKeyCode: CGKeyCode = 55
+        let cKeyCode: CGKeyCode = 8
+
+        guard
+            let commandDown = CGEvent(keyboardEventSource: source, virtualKey: commandKeyCode, keyDown: true),
+            let cDown = CGEvent(keyboardEventSource: source, virtualKey: cKeyCode, keyDown: true),
+            let cUp = CGEvent(keyboardEventSource: source, virtualKey: cKeyCode, keyDown: false),
+            let commandUp = CGEvent(keyboardEventSource: source, virtualKey: commandKeyCode, keyDown: false)
+        else {
+            print("Failed to create CGEvents")
+            return
+        }
+
+        commandDown.flags = .maskCommand
+        cDown.flags = .maskCommand
+        cUp.flags = .maskCommand
+        commandUp.flags = []
+
+        let events = [commandDown, cDown, cUp, commandUp]
+        if let targetPID {
+            for event in events {
+                event.postToPid(targetPID)
+            }
+        } else {
+            for event in events {
+                event.post(tap: .cghidEventTap)
+            }
+        }
+    }
 }

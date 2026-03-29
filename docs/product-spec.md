@@ -70,6 +70,7 @@ The exact compatibility matrix is still being finalized, but the MVP should targ
 8. As a user, I want basic app preferences, such as startup behavior and shortcut configuration, to be editable in a settings UI.
 9. As a user, I want an experimental translation helper whose target language can be changed in settings.
 10. As a user, I want a focused text-only editor mode for long text items so I can clean up clipboard content before reuse.
+11. As a user, I want to create a new empty manual note and edit it even when the main clipboard panel is closed.
 
 ## 7. MVP Functional Requirements
 
@@ -123,11 +124,14 @@ The exact compatibility matrix is still being finalized, but the MVP should targ
 - The pinned-items area can also be opened and closed by keyboard command.
 - The default keyboard command for opening and closing the pinned-items area is Tab while the panel is focused.
 - The panel presents pinned items in a clearly separated area from ordinary history when opened.
+- The panel supports creating a new empty manual note at the top of the list with a dedicated command.
 - Ordinary history items are shown in reverse chronological order.
 - Each panel reopen resets the ordinary-history selection to the latest visible unpinned item rather than restoring the previous scroll position.
 - The user can move selection with the up and down arrow keys.
 - The user can dismiss the panel with Escape.
 - The user can copy the selected item with Command-C.
+- The user can also copy a joined text variant of the selected text item without mutating stored history.
+- The user can also copy a normalized text variant of the selected text item without mutating stored history.
 - The user can paste the selected item with Return or Enter.
 - The default keyboard command for pinning or unpinning the selected item is P while the panel is focused.
 - The default keyboard command for moving a selected pinned item within the pinned order is Option-Up and Option-Down while the panel is focused.
@@ -138,10 +142,15 @@ The exact compatibility matrix is still being finalized, but the MVP should targ
 - Text items can enter a dedicated editor mode from the row actions.
 - Editor mode is text-only and does not apply to image items.
 - Editor mode presents the item content inside a focused text box without row chrome mixed into the editable text.
+- Text is always edited as plain text.
 - Editor mode supports standard text selection, copy, paste, undo, and redo behavior.
-- Editor mode supports command-oriented editing actions such as indent, outdent, line move, join lines, and normalize-for-command.
+- Editor mode supports command-oriented editing actions such as indent, outdent, line move, join lines, and normalization.
+- Join lines removes line breaks and trims leading and trailing whitespace on every source line before concatenation.
+- Normalize preserves line breaks while trimming leading and trailing whitespace on every line.
+- Editor mode may show a side-by-side Markdown preview of the current plain-text draft when requested.
 - Editor changes are committed with Command-Return.
 - Escape cancels editor mode without saving the current draft.
+- A new note command can open a standalone editor-only window when the main panel is not visible.
 
 ### 7.6 Clipboard Reuse
 
@@ -149,6 +158,7 @@ The exact compatibility matrix is still being finalized, but the MVP should targ
 - Pasting an item from the panel restores focus to the previously active app when possible.
 - After focus is restored, the app synthesizes a paste command.
 - While the panel is open, the UI should communicate the intended paste target in a restrained way, such as a compact target label in the header.
+- Detailed keyboard guidance should live in a dedicated help surface opened with `Cmd+?`, not in a dense always-visible header legend.
 - Paste completion may use a short monochrome confirmation toast or HUD, but should avoid loud or colorful notification treatment.
 
 ### 7.7 Settings UI

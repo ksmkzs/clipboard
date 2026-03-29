@@ -2,174 +2,238 @@
 
 [日本語版 README](./README.ja.md)
 
-ClipboardHistory is a keyboard-first macOS clipboard app for people who constantly reuse copied text, code, prompts, commands, and images.
+If you use macOS, you probably know these annoyances already.
 
-Instead of treating your clipboard like a single slot, it gives you a compact floating panel with recent history, a pinned working set, and an editor mode for cleaning up pasted text before you send it back into the app you were using.
+- You copied something, but what was that previous one again... Windows can go back, why can't I?
+- You want to send text to a chat agent, but VS Code feels too heavy...
+- Why is Markdown preview always more awkward than it should be...
+- Why are there so many Apple note / reminder apps and none of them feel right...
+- Why am I still pressing `ctrl+k` over and over just to clear long text in Terminal...
+- Copying text and sending it to Google Translate again and again...
+- Am I really alive just to clean up whitespace in copied text...
 
-## Why It Exists
+ClipboardHistory solves those problems with a compact workflow.
 
-Most clipboard tools are good at storing snippets and bad at helping you actually reuse them.
+---
 
-ClipboardHistory is built around the moments that usually create friction:
+## Main Features
 
-- you copied something useful twenty minutes ago and need it again now
-- you want a small pinned set of snippets that stays close at hand
-- you need to clean up copied text without opening another editor
-- you want to paste back into the previous app immediately, without breaking flow
+- [x] Automatic clipboard history saving and recall
+- [x] A lightweight scratch text window
+- [x] Pin the text you always end up using
+- [x] Automatic whitespace cleanup
+- [x] Turn multi-line text into one sentence with one command
+- [x] Simple Markdown preview
+- [x] Copy already-normalized text in the first place
+- [x] Codex CLI integration so drafting text for the CLI feels natural
 
-## What Makes It Different
+---
 
-- `Pinned workspace`
-  Keep a small manually ordered set of always-available items beside normal history.
-- `Editor mode`
-  Open text items in-place, edit them, undo or redo changes, indent or outdent blocks, move lines, join lines, or normalize text for command use.
-- `Paste-back workflow`
-  Choose an item and send it back into the previously active app from the panel.
-- `Text and image history`
-  Store both kinds of clipboard content in one compact menu bar utility.
-- `Local-first by default`
-  No accounts, no sync, no remote dependency, no cloud service layer.
+## Windows
 
-## Core Workflow
+### Standard Window
 
-1. Copy text or an image as usual.
-2. Open the panel with `⌘⇧V`.
-3. Browse history, pin useful items, or open a text item in editor mode.
-4. Press `Return` to paste the selected item back into the app you were just using.
+This is the main clipboard history window.
 
-## Features
+What you can do:
 
-### History and Reuse
+- browse clipboard history
+- copy again or paste into the frontmost app
+- pin, delete, or rename history items
+- normalize text with one command
+- edit history items directly
+- open Markdown preview
 
-- recent clipboard history for text and images
-- pinned items with manual ordering
-- quick copy-back and paste-back
-- undo and redo for delete, pin, reorder, join, and normalize actions
+### New Text Window
 
-### Text Editing
+This is a standalone window for writing new text.  
+You can open it from anywhere with one command.  
+It saves back into your clipboard workflow, so you can stop collecting files named `Untitled(12).txt`.
 
-- in-panel text editor mode for text items
-- native macOS text editing behavior
-- indent / outdent
-- move line up / down
-- join lines
-- normalize text for command use
-- configurable editor shortcuts
+What you can do:
 
-### App Behavior
+- create a new text draft
+- open Markdown preview
+- send the current text into the frontmost app with `⌘↩`
 
-- configurable global and in-app shortcuts
-- launch at login
-- experimental Google Translate shortcut with configurable target language
+If Codex integration is enabled:
 
-## Keyboard Highlights
+- pressing `Ctrl+G` in Codex CLI opens the current draft in this window
 
-### Default panel shortcuts
+---
 
-- open panel: `⌘⇧V`
-- translation: `⌘⇧T`
-- copy selected item: `⌘C`
-- paste selected item: `Return`
-- delete selected item: `Delete`
-- toggle pinned pane: `Tab`
+## Global Shortcuts
 
-### Default editor shortcuts
+- Open / close clipboard history: `⌘⇧V`
+- Send the current selected / copied context to Google Translate: `⌘⇧T`
+- Open the new text window: `⌃⌘N`
+- Copy the selected item as one sentence: `⌘⌥C`
+- Copy the selected item with normalized whitespace: `⌘⇧C`
 
-- save: `⌘↩`
-- cancel: `Esc`
-- indent / outdent: `Tab` / `⇧Tab`
-- move line up / down: `⌥↑` / `⌥↓`
-- join lines: `⌘J`
-- normalize for command use: `⌘⇧J`
+---
 
-## Download
+## Standard Window Shortcuts
 
-- Download page: https://ksmkzs.github.io/clipboard/
-- Latest release: https://github.com/ksmkzs/clipboard/releases/latest
+- Close: `Esc`
+- Undo / Redo: `⌘Z / ⌘⇧Z`
+- Paste the selected item into the current window: `⌘↩`
+- Edit the selected item: `E`
+- Pin the selected item: `P`
+- Delete the selected item: `⌫`
+- Show / hide pinned items: `Tab`
+- Copy the selected item with normalized whitespace: `⌘⇧C`
+- Copy the selected item as one sentence: `⌘⌥C`
 
-Available release artifacts:
+---
 
-- `ClipboardHistory-mac-universal.zip`
-- `ClipboardHistory-mac-apple-silicon.zip`
-- `ClipboardHistory-mac-intel.zip`
-- `SHA256SUMS.txt`
+## Editor Shortcuts
 
-## Install
+- Cancel: `Esc`
+- Confirm: `⌘↩`
+- Undo / Redo: `⌘Z / ⌘⇧Z`
+- Indent block: `Tab`
+- Outdent block: `⇧Tab`
+- Move line up / down: `⌥↑ / ⌥↓`
+- Markdown preview: `⌘⌥P`
+- Normalize selection whitespace: `⌘⇧J`
+- Join selection into one line: `⌘J`
 
-1. Download the build that matches your Mac.
-2. Unzip `ClipboardHistory.app`.
-3. Move it to `/Applications`.
-4. Launch it once.
-5. Grant Accessibility permission if macOS asks for it.
-6. Open Settings to tune shortcuts and launch at login.
+---
 
-## Compatibility
+## Text Transform Rules
 
-- macOS 14 or later
-- Apple Silicon and Intel release targets
-- built for local desktop use, not sync-heavy cross-device workflows
+### Normalize Whitespace
 
-## Permissions
+Trim leading and trailing whitespace on each line, while preserving line breaks.
 
-ClipboardHistory may require:
+Example:
 
-- Accessibility permission for global hotkeys and paste-back behavior
-- normal clipboard access as part of clipboard history monitoring
-
-## Development
-
-Build from the repository:
-
-```sh
-xcodebuild -project ClipboardHistory.xcodeproj -scheme ClipboardHistory -configuration Debug CODE_SIGNING_ALLOWED=NO build
+```txt
+"  a b   c  
+    d"
 ```
 
-Build signed release artifacts:
+→
 
-```sh
+```txt
+"a b   c
+d"
+```
+
+### Join Into One Line
+
+Trim leading and trailing whitespace on each line, then remove the line breaks entirely.
+
+Example:
+
+```txt
+"  a b   c  
+ d"
+```
+
+→
+
+```txt
+"a b   cd"
+```
+
+---
+
+## Codex CLI Integration
+
+ClipboardHistory can act as the external editor target for Codex CLI `Ctrl+G`.
+
+Expected flow:
+
+1. Press `Ctrl+G` in Codex CLI
+2. A Codex editor window opens in ClipboardHistory
+3. The current Codex input is loaded into that window
+4. Edit it
+5. Press `⌘↩` to send it back to Codex
+
+Notes:
+
+- The Codex editor window does not autosave back to Codex
+- Codex only receives the result when you press `⌘↩`
+
+---
+
+## Settings
+
+Settings currently include:
+
+- global shortcuts
+- standard window shortcuts
+- editor shortcuts
+- global special copy on / off
+- themes
+- UI zoom
+- display language
+- launch at login
+- Codex integration install / inspect / remove
+
+---
+
+## Themes
+
+Several theme presets are included.  
+You can preview them in Settings before switching.
+
+Examples:
+
+- Graphite
+- Terminal
+- Amber
+- Frost
+- Nord
+- Cobalt
+- Sakura
+- Forest
+
+---
+
+## Accessibility Permission
+
+The following features require Accessibility permission:
+
+- paste-back into the frontmost app
+- reading selected text from other apps
+- translation
+- global special copy
+
+If permission is not granted, some features will not work.
+
+---
+
+## Build
+
+```zsh
+xcodebuild -project ClipboardHistory.xcodeproj -scheme ClipboardHistory -configuration Debug build
+```
+
+---
+
+## Release Build
+
+```zsh
 ./scripts/package_release.sh
 ```
 
-This writes the following files to `build/release/`:
+Generated files:
 
-- `ClipboardHistory-mac-universal.zip`
-- `ClipboardHistory-mac-apple-silicon.zip`
-- `ClipboardHistory-mac-intel.zip`
-- `SHA256SUMS.txt`
+- `build/release/ClipboardHistory-mac-universal.zip`
+- `build/release/ClipboardHistory-mac-apple-silicon.zip`
+- `build/release/ClipboardHistory-mac-intel.zip`
+- `build/release/SHA256SUMS.txt`
 
-## Verification
+---
 
-Automated verification currently covers:
+## Status
 
-- editor keyboard command handling
-- editor-specific undo / redo routing
-- non-text persistence undo / redo logic
-- `Enter` paste smoke test against a real TextEdit window
-- paste-target switching smoke test across TextEdit and Script Editor
+ClipboardHistory is still evolving.  
+Shortcuts, external editor integration, window behavior, themes, and helper workflows may continue to be refined.
 
-Still worth checking manually on your own machine:
-
-- launch at login after logout / login
-- final panel behavior across multiple Macs and macOS versions
-- packaged distribution behavior after unzip and first launch
-
-## Repository Layout
-
-- `App/`: app lifecycle, settings state, app delegate
-- `Managers/`: clipboard capture, persistence, paste, hotkeys
-- `Models/`: SwiftData models
-- `Views/`: panel UI, editor UI, AppKit bridges
-- `ClipboardHistoryTests/`: focused keyboard and editing tests
-- `docs/`: product, UI, and quality notes
-
-## Documentation
-
-- [Japanese README](./README.ja.md)
-- [Japanese distribution page](./docs/index.ja.html)
-- [Japanese product specification](./docs/product-spec.ja.md)
-- [Japanese UI specification](./docs/ui-spec.ja.md)
-- [Japanese quality plan](./docs/quality-plan.ja.md)
-- [Japanese data model design](./docs/data-model-design.ja.md)
+---
 
 ## License
 

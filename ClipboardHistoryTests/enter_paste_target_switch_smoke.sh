@@ -4,17 +4,39 @@ set -euo pipefail
 delay_after_copy="${DELAY_AFTER_COPY:-0.35}"
 delay_after_open="${DELAY_AFTER_OPEN:-0.35}"
 delay_after_enter="${DELAY_AFTER_ENTER:-0.70}"
+app_bin="${CLIPBOARD_HISTORY_APP_BIN:-$PWD/.codex-tmp/DerivedData/Build/Products/Debug/ClipboardHistory.app/Contents/MacOS/ClipboardHistory}"
+started_pid=""
 
 original_clipboard="$(pbpaste || true)"
 cleanup() {
+  if [[ -n "$started_pid" ]]; then
+    kill "$started_pid" >/dev/null 2>&1 || true
+    wait "$started_pid" >/dev/null 2>&1 || true
+  fi
   printf "%s" "$original_clipboard" | pbcopy
 }
 trap cleanup EXIT
 
-pgrep -f 'ClipboardHistory.app/Contents/MacOS/ClipboardHistory' >/dev/null || {
-  echo "ClipboardHistory app is not running" >&2
-  exit 3
+start_app_for_smoke() {
+  pkill -f 'ClipboardHistory.app/Contents/MacOS/ClipboardHistory' >/dev/null 2>&1 || true
+  if [[ ! -x "$app_bin" ]]; then
+    echo "ClipboardHistory app binary not found: $app_bin" >&2
+    exit 3
+  fi
+  "$app_bin" >/dev/null 2>&1 &
+  started_pid=$!
+  for _ in {1..20}; do
+    if kill -0 "$started_pid" >/dev/null 2>&1; then
+      sleep 1.2
+      return
+    fi
+    sleep 0.1
+  done
+  echo "ClipboardHistory app did not stay running after launch" >&2
+  exit 4
 }
+
+start_app_for_smoke
 
 run_case() {
   local app_name="$1"

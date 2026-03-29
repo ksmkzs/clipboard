@@ -13,15 +13,12 @@ struct ClipboardHistoryApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     
     let container: ModelContainer = {
-        let schema = Schema([ClipboardItem.self])
-        let supportDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let appDirectory = supportDirectory.appendingPathComponent("ClipboardHistory", isDirectory: true)
-        let storeURL = appDirectory.appendingPathComponent("ClipboardHistory.store")
-        
-        try? FileManager.default.createDirectory(at: appDirectory, withIntermediateDirectories: true)
-        
-        let configuration = ModelConfiguration(schema: schema, url: storeURL, allowsSave: true)
-        return try! ModelContainer(for: schema, configurations: [configuration])
+        if AppDelegate.isRunningAutomatedTests {
+            let schema = Schema([ClipboardItem.self])
+            let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+            return try! ModelContainer(for: schema, configurations: [configuration])
+        }
+        return try! ClipboardStoreBootstrapper.makeContainer()
     }()
 
     var body: some Scene {

@@ -85,7 +85,7 @@ Initial functionality tasks:
   - editor indent / outdent: `Tab / ⇧Tab`
   - editor line up / down: `⌥↑ / ⌥↓`
   - editor join lines: `⌘J`
-  - editor normalize for command: `⌘⇧J`
+  - editor normalize: `⌘⇧J`
 
 ## 3. Robustness
 
@@ -125,11 +125,79 @@ Initial robustness tasks:
 4. duplicate detection と persistence invariant を強化する
 5. 高リスク case の自動 test を追加する
 
-## 4. Execution Order
+## 4. Test Specification Inventory
 
-1. repository structure を整え、source control checkout から build できることを確認する
-2. MVP scope を固定する
-3. testability 向けに refactor する
-4. pure logic / persistence rules の unit test を追加する
-5. pasteboard capture と startup / relaunch behavior の integration test を追加する
-6. manual compatibility checklist と release checklist を追加する
+この repository では、次の behavior を「あればよい挙動」ではなく明示的な test target として扱います。
+
+### 4.1 Core data / persistence rules
+
+- history item は timestamp 降順
+- pinned item は `pinOrder` のみで並ぶ
+- pinned item は通常 history list から除外される
+- pin は現在の pinned 最後尾へ追加される
+- unpin 時は残りの `pinOrder` が正規化される
+- pin label は trim され、永続化され、空文字で削除できる
+- item delete 時は image file と pin label も消える
+- deleted item restore 時は timestamp / pin state / pin label が復元される
+- text edit は明示的に指定しない限り timestamp を動かさない
+- history trimming は unpinned item のみに適用される
+- duplicate capture は unpinned duplicate を置き換えるが pinned duplicate は置き換えない
+
+### 4.2 Text editing rules
+
+- editor mode は editor 自身の undo/redo を持つ
+- `Tab` のように通常画面と編集画面で共有されるキーは、編集中に通常画面側へ漏れない
+- indent / outdent は選択行単位で動く
+- line up / down は selection と順序を壊さない
+- join / normalize for command は undo 可能
+- normalize for command は行構造を維持し、改行を潰すのは join の役割とする
+- clipboard 系 command は editor state boundary を壊さない
+- commit / cancel / help の shortcut は editor に正しく届き、通常の text editing 挙動を壊さない
+- `⌘A`, `⌘C`, `⌘X`, `⌘V`, `⌘←→`, `⌥←→`, 各 delete, `Esc` は標準 macOS text editing に十分近い
+
+### 4.3 Panel workflow rules
+
+- Enter は選択 item を現在の target app に paste する
+- panel invocation 間で target app を変えると実際の paste target も変わる
+- panel-level undo/redo は pin / delete / reorder / 非 editor text transform を扱う
+- 通常 panel mode の join / normalize は新規 item を作らず、既存 item を in-place で更新する
+
+## 5. Complex Regression Workflows
+
+複数 subsystem が同時に正しく動かないと pass しない、大型 regression workflow を 5 本維持します。
+
+1. pinned delete / restore / transform workflow
+   - label、pin、reorder、delete、restore、pin state restore、text edit をまとめて確認
+2. history trim / duplicate workflow
+   - pinned duplicate reject、unpinned duplicate replace、max-history trimming をまとめて確認
+3. image delete / restore workflow
+   - image file persistence、pin label persistence、delete cleanup、restore rehydration、image loading を確認
+4. editor command round-trip workflow
+   - indent、line move、join の後、段階的 undo/redo で exact text を確認
+5. editor clipboard + normalize workflow
+   - cut、paste、normalize の後、undo/redo boundary を exact text で確認
+
+## 6. Diagnostic Breakdown Suites
+
+大型 regression が落ちた時に fault domain を切り分けるための小さい suite を維持します。
+
+- `ClipboardDataManagerBehaviorTests`
+  - ordering、pinning、trimming、delete、restore、label、duplicate handling
+- `EditorNSTextViewKeyboardTests`
+  - 標準 text-editing key と editor command routing
+- `PanelKeyboardRoutingTests`
+  - 通常画面 / 編集画面の routing 境界と help command 表示メタデータ
+- `AppDelegateTargetSelectionTests`
+  - paste target selection と frontmost-app routing
+- smoke scripts
+  - `enter_paste_smoke.sh`
+  - `enter_paste_target_switch_smoke.sh`
+
+## 7. Execution Order
+
+1. 上の specification inventory を固定する
+2. 5 本の complex workflow regression を green に保つ
+3. diagnostic breakdown suite は narrow / fast に保つ
+4. panel routing 変更時は target-selection / paste smoke を回す
+5. editor command 変更時は editor keyboard test を回す
+6. その後に compatibility / release check を広げる

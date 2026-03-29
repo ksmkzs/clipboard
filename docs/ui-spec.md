@@ -88,7 +88,7 @@ The header should stay small and quiet.
 Required contents:
 
 - app title: `Clipboard History`
-- compact keyboard help text
+- compact help affordance, such as `⌘?`
 - compact paste-target hint when available, such as `Paste to Cursor in VS Code`
 - pinned-area open / close affordance on the right side
 
@@ -99,10 +99,10 @@ Header behavior:
 - the open / close affordance for pinned items should be visibly interactive but not dominant
 - the paste-target hint should stay secondary and quiet, not a large banner
 
-Recommended header copy:
+Help behavior:
 
-- first line: product title
-- second line: compact keyboard legend such as `↑↓ Select  Cmd+C Copy  Enter Paste  P Pin  Tab Pins  Del Delete  Esc Close`
+- detailed keyboard guidance should live in a dedicated help surface opened with `Cmd+?`
+- the header should hint that help exists, but should not list most command bindings inline
 
 ## 6. Main Content Region
 

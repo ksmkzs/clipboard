@@ -57,4 +57,66 @@ final class AppDelegateTargetSelectionTests: XCTestCase {
 
         XCTAssertNil(AppDelegate.preferredTargetPID(for: decision))
     }
+
+    func testHelpPanelPlacementUsesRightSideWhenSpaceExists() {
+        let placement = AppDelegate.helpPanelPlacement(
+            for: NSRect(x: 100, y: 120, width: 320, height: 420),
+            within: NSRect(x: 20, y: 20, width: 1200, height: 800),
+            helpSize: NSSize(width: 400, height: 420),
+            gap: 14
+        )
+
+        XCTAssertEqual(placement.side, .right)
+        XCTAssertFalse(placement.frame.intersects(NSRect(x: 100, y: 120, width: 320, height: 420)))
+    }
+
+    func testHelpPanelPlacementUsesLeftSideWhenRightSideWouldOverlapEdge() {
+        let placement = AppDelegate.helpPanelPlacement(
+            for: NSRect(x: 860, y: 120, width: 320, height: 420),
+            within: NSRect(x: 20, y: 20, width: 1200, height: 800),
+            helpSize: NSSize(width: 340, height: 420),
+            gap: 14
+        )
+
+        XCTAssertEqual(placement.side, .left)
+        XCTAssertFalse(placement.frame.intersects(NSRect(x: 860, y: 120, width: 320, height: 420)))
+    }
+
+    func testHelpPanelPlacementCentersWhenNeitherSideFits() {
+        let placement = AppDelegate.helpPanelPlacement(
+            for: NSRect(x: 160, y: 80, width: 320, height: 420),
+            within: NSRect(x: 20, y: 20, width: 640, height: 560),
+            helpSize: NSSize(width: 420, height: 420),
+            gap: 14
+        )
+
+        XCTAssertEqual(placement.side, .centered)
+        XCTAssertEqual(placement.frame.width, 420)
+        XCTAssertEqual(placement.frame.height, 420)
+    }
+
+    func testAuxiliaryWindowPlacementStaysInsideVisibleFrameWhenRightSideWouldOverflow() {
+        let frame = AppDelegate.auxiliaryWindowPlacement(
+            anchorFrame: NSRect(x: 1040, y: 120, width: 320, height: 420),
+            visibleFrame: NSRect(x: 20, y: 20, width: 1280, height: 820),
+            windowSize: NSSize(width: 620, height: 560),
+            gap: 16
+        )
+
+        XCTAssertGreaterThanOrEqual(frame.minX, 20)
+        XCTAssertGreaterThanOrEqual(frame.minY, 20)
+        XCTAssertLessThanOrEqual(frame.maxX, 1300)
+        XCTAssertLessThanOrEqual(frame.maxY, 840)
+    }
+
+    func testExternalEditorCloseOutcomePersistsOnlyWhenCommitRequested() {
+        XCTAssertEqual(
+            AppDelegate.externalEditorCloseOutcome(commitRequested: true),
+            .persistAndSignal
+        )
+        XCTAssertEqual(
+            AppDelegate.externalEditorCloseOutcome(commitRequested: false),
+            .signalOnly
+        )
+    }
 }
