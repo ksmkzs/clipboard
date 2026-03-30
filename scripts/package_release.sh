@@ -10,6 +10,7 @@ X86_64_DERIVED_DATA="$ROOT_DIR/.codex-tmp/release-derived-x86_64"
 OUTPUT_DIR="$ROOT_DIR/build/release"
 APP_NAME="ClipboardHistory.app"
 EXECUTABLE_NAME="ClipboardHistory"
+DMG_NAME="ClipboardHistory.dmg"
 
 mkdir -p "$ROOT_DIR/.codex-tmp"
 STAGING_DIR="$(mktemp -d "$ROOT_DIR/.codex-tmp/package-release.XXXXXX")"
@@ -79,6 +80,25 @@ package_zip() {
   ditto -c -k --sequesterRsrc --keepParent "$app_path" "$output_zip"
 }
 
+package_dmg() {
+  local app_path="$1"
+  local output_dmg="$2"
+  local dmg_stage="$STAGING_DIR/dmg"
+  local temp_dmg="$STAGING_DIR/ClipboardHistory-temp.dmg"
+
+  rm -rf "$dmg_stage" "$temp_dmg" "$output_dmg"
+  mkdir -p "$dmg_stage"
+  cp -R "$app_path" "$dmg_stage/$APP_NAME"
+  ln -s /Applications "$dmg_stage/Applications"
+
+  hdiutil create \
+    -volname "ClipboardHistory" \
+    -srcfolder "$dmg_stage" \
+    -fs HFS+ \
+    -format UDZO \
+    "$output_dmg" >/dev/null
+}
+
 make_arch_build() {
   local source_app="$1"
   local source_exec="$2"
@@ -96,11 +116,12 @@ cp -R "$ARM64_APP" "$UNIVERSAL_APP"
 lipo -create "$ARM64_EXEC" "$X86_64_EXEC" -output "$UNIVERSAL_EXEC"
 codesign --force --sign "$SIGN_IDENTITY" -o runtime --timestamp=none --deep "$UNIVERSAL_APP"
 package_zip "$UNIVERSAL_APP" "$OUTPUT_DIR/ClipboardHistory-mac-universal.zip"
+package_dmg "$UNIVERSAL_APP" "$OUTPUT_DIR/$DMG_NAME"
 
 make_arch_build "$ARM64_APP" "$ARM64_EXEC" "apple-silicon"
 make_arch_build "$X86_64_APP" "$X86_64_EXEC" "intel"
 
-(cd "$OUTPUT_DIR" && shasum -a 256 ClipboardHistory-mac-*.zip > SHA256SUMS.txt)
+(cd "$OUTPUT_DIR" && shasum -a 256 ClipboardHistory.dmg ClipboardHistory-mac-*.zip > SHA256SUMS.txt)
 
 echo
 echo "Artifacts written to: $OUTPUT_DIR"

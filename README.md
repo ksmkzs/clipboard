@@ -221,6 +221,7 @@ xcodebuild -project ClipboardHistory.xcodeproj -scheme ClipboardHistory -configu
 
 Generated files:
 
+- `build/release/ClipboardHistory.dmg`
 - `build/release/ClipboardHistory-mac-universal.zip`
 - `build/release/ClipboardHistory-mac-apple-silicon.zip`
 - `build/release/ClipboardHistory-mac-intel.zip`

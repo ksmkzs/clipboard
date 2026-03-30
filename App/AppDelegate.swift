@@ -3163,6 +3163,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             return
         }
 
+        let preservedFrame = window.frame
         stopCodexSessionStateMonitor()
         if let completionMarkerURL = noteEditorCompletionMarkerURL {
             signalCodexCompletionMarker(at: completionMarkerURL)
@@ -3198,6 +3199,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         )
         window.contentViewController = hostingController
         window.title = externalEditorWindowTitle(for: externalFileURL, isOrphaned: true, codexContext: codexContext)
+        window.setFrame(preservedFrame, display: false)
         activateCurrentApp()
         window.orderFrontRegardless()
         window.makeKeyAndOrderFront(nil)
