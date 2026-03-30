@@ -166,4 +166,48 @@ final class AppDelegateTargetSelectionTests: XCTestCase {
         XCTAssertEqual(parsed?.fileURL.path, "/tmp/codex-draft.md")
         XCTAssertNil(parsed?.projectRootURL)
     }
+
+    func testResolvedFallbackSelectionTextPrefersChangedPasteboardText() {
+        let resolved = AppDelegate.resolvedFallbackSelectionText(
+            pasteboardChanged: true,
+            currentClipboardText: "selected text",
+            previousClipboardText: "old text",
+            accessibilitySelectedText: nil
+        )
+
+        XCTAssertEqual(resolved, "selected text")
+    }
+
+    func testResolvedFallbackSelectionTextFallsBackToAccessibilitySelection() {
+        let resolved = AppDelegate.resolvedFallbackSelectionText(
+            pasteboardChanged: false,
+            currentClipboardText: "old text",
+            previousClipboardText: "old text",
+            accessibilitySelectedText: "selected text"
+        )
+
+        XCTAssertEqual(resolved, "selected text")
+    }
+
+    func testResolvedFallbackSelectionTextRejectsUnchangedClipboardWithoutSelection() {
+        let resolved = AppDelegate.resolvedFallbackSelectionText(
+            pasteboardChanged: false,
+            currentClipboardText: "old text",
+            previousClipboardText: "old text",
+            accessibilitySelectedText: nil
+        )
+
+        XCTAssertNil(resolved)
+    }
+
+    func testResolvedFallbackSelectionTextAcceptsTextChangedFromSentinelProbe() {
+        let resolved = AppDelegate.resolvedFallbackSelectionText(
+            pasteboardChanged: true,
+            currentClipboardText: "same-as-original",
+            previousClipboardText: "ClipboardHistorySelectionProbe-sentinel",
+            accessibilitySelectedText: nil
+        )
+
+        XCTAssertEqual(resolved, "same-as-original")
+    }
 }

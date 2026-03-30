@@ -411,7 +411,7 @@ final class AppSettingsStoreTests: XCTestCase {
         XCTAssertEqual(loaded.orphanCodexDiscardShortcut, AppSettings.defaultOrphanCodexDiscardShortcut)
         XCTAssertTrue(loaded.globalCopyJoinedEnabled)
         XCTAssertTrue(loaded.globalCopyNormalizedEnabled)
-        XCTAssertEqual(defaults.integer(forKey: "app.settings.migrationVersion"), 9)
+        XCTAssertEqual(defaults.integer(forKey: "app.settings.migrationVersion"), 10)
 
         defaults.removePersistentDomain(forName: suiteName)
     }

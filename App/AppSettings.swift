@@ -89,6 +89,14 @@ struct AppSettings: Equatable {
         keyCode: UInt32(kVK_ANSI_N),
         modifiers: UInt32(cmdKey)
     )
+    static let legacyJoinLinesShortcut = HotKeyManager.Shortcut(
+        keyCode: UInt32(kVK_ANSI_J),
+        modifiers: UInt32(cmdKey)
+    )
+    static let legacyNormalizeForCommandShortcut = HotKeyManager.Shortcut(
+        keyCode: UInt32(kVK_ANSI_J),
+        modifiers: UInt32(cmdKey | shiftKey)
+    )
     static let previousLocalNewNoteShortcut = HotKeyManager.Shortcut(
         keyCode: UInt32(kVK_ANSI_N),
         modifiers: UInt32(cmdKey | shiftKey)
@@ -485,7 +493,7 @@ final class UserDefaultsAppSettingsStore: AppSettingsStore {
     }
 
     private let userDefaults: UserDefaults
-    private static let currentMigrationVersion = 9
+    private static let currentMigrationVersion = 10
 
     init(userDefaults: UserDefaults = .standard) {
         self.userDefaults = userDefaults
@@ -697,6 +705,22 @@ final class UserDefaultsAppSettingsStore: AppSettingsStore {
         }
         if settings.globalCopyNormalizedShortcut == nil {
             settings.globalCopyNormalizedShortcut = AppSettings.defaultGlobalCopyNormalizedShortcut
+            didMigrate = true
+        }
+        if settings.copyJoinedShortcut == AppSettings.legacyJoinLinesShortcut {
+            settings.copyJoinedShortcut = AppSettings.default.copyJoinedShortcut
+            didMigrate = true
+        }
+        if settings.copyNormalizedShortcut == AppSettings.legacyNormalizeForCommandShortcut {
+            settings.copyNormalizedShortcut = AppSettings.default.copyNormalizedShortcut
+            didMigrate = true
+        }
+        if settings.joinLinesShortcut == AppSettings.legacyJoinLinesShortcut {
+            settings.joinLinesShortcut = AppSettings.default.joinLinesShortcut
+            didMigrate = true
+        }
+        if settings.normalizeForCommandShortcut == AppSettings.legacyNormalizeForCommandShortcut {
+            settings.normalizeForCommandShortcut = AppSettings.default.normalizeForCommandShortcut
             didMigrate = true
         }
         settings.globalCopyJoinedEnabled = true

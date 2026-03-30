@@ -59,8 +59,8 @@ struct ClipboardHistoryView: View {
 
     @ObservedObject var appDelegate: AppDelegate
     var dataManager: ClipboardDataManager
-    var onCopyRequest: (ClipboardItem) -> Void
-    var onCopyTextRequest: (String, String) -> Void
+    var onCopyRequest: (ClipboardItem) -> Bool
+    var onCopyTextRequest: (String, String) -> Bool
     var onPasteRequest: (ClipboardItem) -> Void
     var onOpenSettings: () -> Void
     var onClosePanel: () -> Void
@@ -164,6 +164,33 @@ struct ClipboardHistoryView: View {
         .onReceive(NotificationCenter.default.publisher(for: .clipboardItemsDidChange)) { _ in
             refreshItemsFromStore()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .clipboardTransformRequested)) { notification in
+            guard let action = notification.userInfo?["action"] as? String else { return }
+            switch action {
+            case "join":
+                if editingItemID != nil {
+                    NotificationCenter.default.post(
+                        name: .editorCommandRequested,
+                        object: nil,
+                        userInfo: ["command": EditorCommand.joinLines.rawValue]
+                    )
+                } else {
+                    joinSelectedItemLines()
+                }
+            case "normalize":
+                if editingItemID != nil {
+                    NotificationCenter.default.post(
+                        name: .editorCommandRequested,
+                        object: nil,
+                        userInfo: ["command": EditorCommand.normalizeForCommand.rawValue]
+                    )
+                } else {
+                    normalizeSelectedItemForCommand()
+                }
+            default:
+                break
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .clipboardManualNoteCreated)) { notification in
             guard let itemID = notification.userInfo?["itemID"] as? UUID else { return }
             refreshItemsFromStore()
@@ -194,8 +221,8 @@ struct ClipboardHistoryView: View {
             onEnter: { commitFocusedSelection() },
             onPasteSelection: { pasteSelectedItem() },
             onCopyCommand: { copySelectedItem() },
-            onCopyJoinedCommand: { copyJoinedSelectedItem() },
-            onCopyNormalizedCommand: { copyNormalizedSelectedItem() },
+            onCopyJoinedCommand: { joinSelectedItemLines() },
+            onCopyNormalizedCommand: { normalizeSelectedItemForCommand() },
             onClosePanel: { handleEscapeAction() },
             onDelete: { deleteSelectedItem() },
             onTogglePin: { togglePinnedForSelectedItem() },
@@ -295,7 +322,9 @@ struct ClipboardHistoryView: View {
             onCommitEditor: commitEditorIfNeeded,
             onCancelEditor: cancelEditorIfNeeded,
             onToggleMarkdownPreview: toggleMarkdownPreview,
-            onCopyRaw: onCopyRequest,
+            onCopyRaw: { item in
+                _ = onCopyRequest(item)
+            },
             onToggleHelp: toggleHelpOverlay,
             onZoomIn: { appDelegate.increaseInterfaceZoom() },
             onZoomOut: { appDelegate.decreaseInterfaceZoom() },
@@ -342,7 +371,9 @@ struct ClipboardHistoryView: View {
             onCommitEditor: commitEditorIfNeeded,
             onCancelEditor: cancelEditorIfNeeded,
             onToggleMarkdownPreview: toggleMarkdownPreview,
-            onCopyRaw: onCopyRequest,
+            onCopyRaw: { item in
+                _ = onCopyRequest(item)
+            },
             onToggleHelp: toggleHelpOverlay,
             onZoomIn: { appDelegate.increaseInterfaceZoom() },
             onZoomOut: { appDelegate.decreaseInterfaceZoom() },
@@ -524,12 +555,13 @@ struct ClipboardHistoryView: View {
 
     private func togglePinned(_ item: ClipboardItem) {
         commitActiveEditorIfNeeded()
+        let willBePinned = !item.isPinned
         let before = currentPinStateSnapshot()
-        _ = dataManager.setPinned(!item.isPinned, for: item.id)
+        _ = dataManager.setPinned(willBePinned, for: item.id)
         refreshItemsFromStore()
         let after = currentPinStateSnapshot()
         pushUndo(.pinTransition(before: before, after: after))
-        showToast(item.isPinned ? "Unpinned" : "Pinned")
+        showToast(willBePinned ? "Pinned" : "Unpinned")
         if item.isPinned && selectionScope == .pinned {
             selectionScope = .history
         }
@@ -700,9 +732,10 @@ struct ClipboardHistoryView: View {
 
     private func copySelectedItem() {
         commitActiveEditorIfNeeded()
-        guard let selected = selectedItem() else { return }
-        onCopyRequest(selected)
-        showToast("Copied", style: .copy)
+        guard let item = actionableItem() else { return }
+        if onCopyRequest(item) {
+            showToast("Copied", style: .copy)
+        }
     }
 
     private func copyJoinedSelectedItem() {
@@ -727,6 +760,13 @@ struct ClipboardHistoryView: View {
     private func selectedItem() -> ClipboardItem? {
         guard let selectedItemID else { return nil }
         return allItemsByID[selectedItemID]
+    }
+
+    private func actionableItem() -> ClipboardItem? {
+        if let focused = focusedItem() {
+            return focused
+        }
+        return selectedItem()
     }
 
     private func focusedItem() -> ClipboardItem? {
@@ -853,7 +893,7 @@ struct ClipboardHistoryView: View {
 
     private func applyTextTransformToSelectedItem(actionName: String, transform: (String) -> String) {
         guard editingItemID == nil,
-              let item = selectedItem(),
+              let item = actionableItem(),
               item.type == .text,
               !item.isLargeText,
               let beforeText = dataManager.resolvedText(for: item) else {
@@ -871,13 +911,15 @@ struct ClipboardHistoryView: View {
 
     private func copyTransformedSelectedText(actionName: String, transform: (String) -> String) {
         commitActiveEditorIfNeeded()
-        guard let item = selectedItem(),
+        guard let item = actionableItem(),
               item.type == .text,
               let beforeText = dataManager.resolvedText(for: item) else {
             return
         }
 
-        onCopyTextRequest(transform(beforeText), actionName)
+        guard onCopyTextRequest(transform(beforeText), actionName) else {
+            return
+        }
         let style: ToastStyle
         switch actionName {
         case "Joined", "Copied joined text":
@@ -2353,4 +2395,5 @@ extension Notification.Name {
     static let clipboardPanelWillClose = Notification.Name("clipboardPanelWillClose")
     static let clipboardHelpRequested = Notification.Name("clipboardHelpRequested")
     static let clipboardManualNoteCreated = Notification.Name("clipboardManualNoteCreated")
+    static let clipboardTransformRequested = Notification.Name("clipboardTransformRequested")
 }

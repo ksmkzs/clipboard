@@ -311,12 +311,12 @@ struct SettingsView: View {
                         shortcut: binding(for: .redo)
                     )
                     shortcutRow(
-                        title: t("Copy joined selected item", "選択中の項目を一文化してコピー"),
+                        title: t("Join selected item into one sentence", "選択中の項目を一文に整形"),
                         target: .copyJoined,
                         shortcut: binding(for: .copyJoined)
                     )
                     shortcutRow(
-                        title: t("Copy normalized selected item", "選択中の項目を整形してコピー"),
+                        title: t("Normalize selected item whitespace", "選択中の項目の空白を整形"),
                         target: .copyNormalized,
                         shortcut: binding(for: .copyNormalized)
                     )
@@ -723,9 +723,9 @@ struct SettingsView: View {
         case .moveLineDown:
             return t("Move line", "行単位で移動")
         case .copyJoined:
-            return t("Copy joined text", "一文化してコピー")
+            return t("Join into one sentence", "選択中の項目を一文に整形")
         case .copyNormalized:
-            return t("Copy normalized text", "整形してコピー")
+            return t("Normalize whitespace", "選択中の項目の空白を整形")
         case .toggleMarkdownPreview:
             return t("Markdown preview", "Markdown プレビュー")
         case .joinLines:
@@ -1141,8 +1141,8 @@ struct SettingsView: View {
                     (t("Delete selected item", "選択中の項目を削除"), draft.deleteItemShortcut),
                     (t("Undo", "元に戻す"), draft.undoShortcut),
                     (t("Redo", "やり直し"), draft.redoShortcut),
-                    (t("Copy joined text", "一文化してコピー"), draft.copyJoinedShortcut),
-                    (t("Copy normalized text", "整形してコピー"), draft.copyNormalizedShortcut)
+                    (t("Join selected item into one sentence", "選択中の項目を一文に整形"), draft.copyJoinedShortcut),
+                    (t("Normalize selected item whitespace", "選択中の項目の空白を整形"), draft.copyNormalizedShortcut)
                 ]
             ),
             (
