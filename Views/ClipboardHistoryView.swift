@@ -1289,8 +1289,8 @@ enum ClipboardHelpCatalog {
 
     static func copyCommands(settings: AppSettings) -> [ClipboardHelpCommandDescriptor] {
         [
-            .init(title: t("Copy normalized selected item", "選択中の項目の空白を整形してコピー", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.copyNormalizedShortcut), symbolName: "terminal"),
-            .init(title: t("Copy selected item as one sentence", "選択中の項目を一文に整形してコピー", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.copyJoinedShortcut), symbolName: "link.circle")
+            .init(title: t("Replace clipboard with normalized text", "クリップボード内容を整形して上書き", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.copyNormalizedShortcut), symbolName: "terminal"),
+            .init(title: t("Replace clipboard with one-line text", "クリップボード内容を一文化して上書き", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.copyJoinedShortcut), symbolName: "link.circle")
         ]
     }
 
@@ -1750,8 +1750,8 @@ struct StandaloneNoteEditorView: View {
                         .foregroundStyle(.secondary)
                 }
                 Text(t(
-                    "You can keep editing, then copy to clipboard or discard this draft.",
-                    "編集は継続できます。内容をクリップボードへ保存するか、この下書きを削除してください。"
+                    "The Codex-side connection was lost unexpectedly. You can keep editing, then copy to clipboard or discard this draft.",
+                    "Codex 側との接続が想定外に切れました。編集は継続できます。内容をクリップボードへ保存するか、この下書きを削除してください。"
                 ))
                 .font(.system(size: scaled(10)))
                 .foregroundStyle(.secondary)

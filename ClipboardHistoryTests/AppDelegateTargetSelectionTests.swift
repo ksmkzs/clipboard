@@ -167,47 +167,30 @@ final class AppDelegateTargetSelectionTests: XCTestCase {
         XCTAssertNil(parsed?.projectRootURL)
     }
 
-    func testResolvedFallbackSelectionTextPrefersChangedPasteboardText() {
-        let resolved = AppDelegate.resolvedFallbackSelectionText(
-            pasteboardChanged: true,
-            currentClipboardText: "selected text",
-            previousClipboardText: "old text",
-            accessibilitySelectedText: nil
+    func testResolvedSpecialCopySourceTextPrefersPanelText() {
+        let resolved = AppDelegate.resolvedSpecialCopySourceText(
+            panelText: "panel text",
+            clipboardText: "clipboard text"
         )
 
-        XCTAssertEqual(resolved, "selected text")
+        XCTAssertEqual(resolved, "panel text")
     }
 
-    func testResolvedFallbackSelectionTextFallsBackToAccessibilitySelection() {
-        let resolved = AppDelegate.resolvedFallbackSelectionText(
-            pasteboardChanged: false,
-            currentClipboardText: "old text",
-            previousClipboardText: "old text",
-            accessibilitySelectedText: "selected text"
+    func testResolvedSpecialCopySourceTextFallsBackToClipboardText() {
+        let resolved = AppDelegate.resolvedSpecialCopySourceText(
+            panelText: nil,
+            clipboardText: "clipboard text"
         )
 
-        XCTAssertEqual(resolved, "selected text")
+        XCTAssertEqual(resolved, "clipboard text")
     }
 
-    func testResolvedFallbackSelectionTextRejectsUnchangedClipboardWithoutSelection() {
-        let resolved = AppDelegate.resolvedFallbackSelectionText(
-            pasteboardChanged: false,
-            currentClipboardText: "old text",
-            previousClipboardText: "old text",
-            accessibilitySelectedText: nil
+    func testResolvedSpecialCopySourceTextRejectsBlankValues() {
+        let resolved = AppDelegate.resolvedSpecialCopySourceText(
+            panelText: "   \n",
+            clipboardText: "\n"
         )
 
         XCTAssertNil(resolved)
-    }
-
-    func testResolvedFallbackSelectionTextAcceptsTextChangedFromSentinelProbe() {
-        let resolved = AppDelegate.resolvedFallbackSelectionText(
-            pasteboardChanged: true,
-            currentClipboardText: "same-as-original",
-            previousClipboardText: "ClipboardHistorySelectionProbe-sentinel",
-            accessibilitySelectedText: nil
-        )
-
-        XCTAssertEqual(resolved, "same-as-original")
     }
 }

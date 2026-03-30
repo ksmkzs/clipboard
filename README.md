@@ -67,8 +67,8 @@ If Codex integration is enabled:
 - Open / close clipboard history: `⌘⇧V`
 - Send the current selected / copied context to Google Translate: `⌘⇧T`
 - Open the new text window: `⌃⌘N`
-- Copy the selected item as one sentence: `⌘⌥C`
-- Copy the selected item with normalized whitespace: `⌘⇧C`
+- Replace clipboard with one-line text: `⌘⌥C`
+- Replace clipboard with normalized text: `⌘⇧C`
 
 ---
 
@@ -81,8 +81,8 @@ If Codex integration is enabled:
 - Pin the selected item: `P`
 - Delete the selected item: `⌫`
 - Show / hide pinned items: `Tab`
-- Copy the selected item with normalized whitespace: `⌘⇧C`
-- Copy the selected item as one sentence: `⌘⌥C`
+- Normalize the selected item: `⌘⇧C`
+- Join the selected item into one sentence: `⌘⌥C`
 
 ---
 
@@ -155,6 +155,8 @@ Notes:
 
 - The Codex editor window does not autosave back to Codex
 - Codex only receives the result when you press `⌘↩`
+- Closing the window does not send anything back to Codex
+- The orphaned state only appears when the Codex-side connection is lost unexpectedly
 
 ---
 

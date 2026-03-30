@@ -204,6 +204,13 @@ struct SettingsView: View {
                     .font(.subheadline)
 
                     Text(t(
+                        "Closing the Codex window does not send anything back. Orphan mode appears only when the Codex-side connection is lost unexpectedly.",
+                        "Codex ウィンドウを閉じただけでは内容は返りません。orphan 状態は、Codex 側との接続が想定外に切れた時だけ表示されます。"
+                    ))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                    Text(t(
                         "ClipboardHistory edits ~/.zshrc or ~/.bashrc only when you explicitly install, inspect, or remove this integration.",
                         "この連携は、明示的にインストール・確認・削除した時だけ ~/.zshrc または ~/.bashrc を読み書きします。"
                     ))
@@ -255,20 +262,20 @@ struct SettingsView: View {
                         shortcut: optionalBinding(for: .globalNewNote)
                     )
                     Toggle(
-                        t("Enable global joined copy", "グローバルの一文化コピーを有効化"),
+                        t("Enable global clipboard join", "グローバルのクリップボード一文化を有効化"),
                         isOn: $draftSettings.globalCopyJoinedEnabled
                     )
                     Toggle(
-                        t("Enable global normalized copy", "グローバルの整形コピーを有効化"),
+                        t("Enable global clipboard normalize", "グローバルのクリップボード整形を有効化"),
                         isOn: $draftSettings.globalCopyNormalizedEnabled
                     )
                     optionalShortcutRow(
-                        title: t("Copy joined selection from anywhere", "どこからでも一文化してコピー"),
+                        title: t("Replace clipboard with one-line text", "クリップボード内容を一文化して上書き"),
                         target: .globalCopyJoined,
                         shortcut: optionalBinding(for: .globalCopyJoined)
                     )
                     optionalShortcutRow(
-                        title: t("Copy normalized selection from anywhere", "どこからでも整形してコピー"),
+                        title: t("Replace clipboard with normalized text", "クリップボード内容を整形して上書き"),
                         target: .globalCopyNormalized,
                         shortcut: optionalBinding(for: .globalCopyNormalized)
                     )
@@ -695,9 +702,9 @@ struct SettingsView: View {
         case .globalNewNote:
             return t("Create new note from anywhere", "どこからでも新規ノートを作成")
         case .globalCopyJoined:
-            return t("Copy joined selection from anywhere", "どこからでも選択テキストを一文化してコピー")
+            return t("Replace clipboard with one-line text", "クリップボード内容を一文化して上書き")
         case .globalCopyNormalized:
-            return t("Copy normalized selection from anywhere", "どこからでも選択テキストを整形してコピー")
+            return t("Replace clipboard with normalized text", "クリップボード内容を整形して上書き")
         case .newNote:
             return t("Create new note", "新規ノートを作成")
         case .togglePin:
@@ -1125,8 +1132,8 @@ struct SettingsView: View {
                     (t("Translation shortcut", "翻訳"), draft.translationShortcut)
                 ] + [
                     (t("New note from anywhere", "どこからでも新規作成"), draft.globalNewNoteShortcut),
-                    (t("Copy joined selection from anywhere", "どこからでも一文化してコピー"), draft.globalCopyJoinedEnabled ? draft.globalCopyJoinedShortcut : nil),
-                    (t("Copy normalized selection from anywhere", "どこからでも整形してコピー"), draft.globalCopyNormalizedEnabled ? draft.globalCopyNormalizedShortcut : nil)
+                    (t("Replace clipboard with one-line text", "クリップボード内容を一文化して上書き"), draft.globalCopyJoinedEnabled ? draft.globalCopyJoinedShortcut : nil),
+                    (t("Replace clipboard with normalized text", "クリップボード内容を整形して上書き"), draft.globalCopyNormalizedEnabled ? draft.globalCopyNormalizedShortcut : nil)
                 ].compactMap { title, shortcut in
                     shortcut.map { (title, $0) }
                 }

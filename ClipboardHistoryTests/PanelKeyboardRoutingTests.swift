@@ -307,8 +307,8 @@ final class ClipboardHelpCatalogTests: XCTestCase {
         let titles = Set(commands.map(\.title))
 
         XCTAssertEqual(commands.count, 2)
-        XCTAssertTrue(titles.contains("Copy normalized selected item"))
-        XCTAssertTrue(titles.contains("Copy selected item as one sentence"))
+        XCTAssertTrue(titles.contains("Replace clipboard with normalized text"))
+        XCTAssertTrue(titles.contains("Replace clipboard with one-line text"))
     }
 
     func testHelpCatalogLocalizesNormalizeByLanguage() {

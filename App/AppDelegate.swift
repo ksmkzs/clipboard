@@ -1120,222 +1120,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         targetPID: pid_t? = nil,
         transform: @escaping (String) -> String
     ) {
+        let panelText: String?
         if panel.isVisible,
            let item = highlightedPanelItem,
-           item.type == .text,
-           let text = dataManager.resolvedText(for: item),
-           !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            _ = copyTextToClipboard(
-                transform(text),
-                feedbackMessage: feedbackMessage,
-                forceFloatingFeedback: true,
-                storeInHistory: true,
-                feedbackStyle: floatingFeedbackStyle(for: feedbackMessage)
-            )
-            return
-        }
-
-        if let selectedText = selectedTextFromFocusedElement(),
-           !selectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            _ = copyTextToClipboard(
-                transform(selectedText),
-                feedbackMessage: feedbackMessage,
-                forceFloatingFeedback: true,
-                storeInHistory: true,
-                feedbackStyle: floatingFeedbackStyle(for: feedbackMessage)
-            )
-            return
-        }
-
-        fallbackCopySelectedTextFromFrontmostApp(
-            feedbackMessage: feedbackMessage,
-            targetPID: targetPID,
-            transform: transform
-        )
-    }
-
-    private func fallbackCopySelectedTextFromFrontmostApp(
-        feedbackMessage: String,
-        targetPID: pid_t?,
-        transform: @escaping (String) -> String
-    ) {
-        let previousPasteboardSnapshot = snapshotPasteboardItems()
-        let sentinelText = "ClipboardHistorySelectionProbe-\(UUID().uuidString)"
-        installPasteboardSentinel(sentinelText)
-        let previousChangeCount = NSPasteboard.general.changeCount
-        let previousClipboardString = NSPasteboard.general.string(forType: .string)
-        clipboardController.suppressNextCapturedExternalCopy()
-        clipboardController.suppressNextCapturedCopyKeystroke()
-
-        scheduleFallbackCopyAfterModifiersRelease(
-            targetPID: targetPID,
-            previousChangeCount: previousChangeCount,
-            previousClipboardString: previousClipboardString,
-            previousPasteboardSnapshot: previousPasteboardSnapshot,
-            feedbackMessage: feedbackMessage,
-            transform: transform,
-            attemptsRemaining: 20
-        )
-    }
-
-    private func scheduleFallbackCopyAfterModifiersRelease(
-        targetPID: pid_t?,
-        previousChangeCount: Int,
-        previousClipboardString: String?,
-        previousPasteboardSnapshot: [NSPasteboardItem],
-        feedbackMessage: String,
-        transform: @escaping (String) -> String,
-        attemptsRemaining: Int
-    ) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { [weak self] in
-            guard let self else { return }
-
-            if self.areModifierKeysStillPressed(), attemptsRemaining > 0 {
-                self.scheduleFallbackCopyAfterModifiersRelease(
-                    targetPID: targetPID,
-                    previousChangeCount: previousChangeCount,
-                    previousClipboardString: previousClipboardString,
-                    previousPasteboardSnapshot: previousPasteboardSnapshot,
-                    feedbackMessage: feedbackMessage,
-                    transform: transform,
-                    attemptsRemaining: attemptsRemaining - 1
-                )
-                return
-            }
-
-            self.dispatchFallbackCopyKeystroke(targetPID: targetPID)
-            self.resolveFallbackSelectionCopy(
-                targetPID: targetPID,
-                previousChangeCount: previousChangeCount,
-                previousClipboardString: previousClipboardString,
-                previousPasteboardSnapshot: previousPasteboardSnapshot,
-                feedbackMessage: feedbackMessage,
-                attemptsRemaining: 5,
-                didRetryWithUntargetedCopy: false,
-                transform: transform
-            )
-        }
-    }
-
-    private func dispatchFallbackCopyKeystroke(targetPID: pid_t?) {
-        if let targetPID {
-            PasteSynthesizer.simulateCmdC(targetPID: targetPID)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) {
-                PasteSynthesizer.simulateCmdC()
-            }
+           item.type == .text {
+            panelText = dataManager.resolvedText(for: item)
         } else {
-            PasteSynthesizer.simulateCmdC()
+            panelText = nil
         }
-    }
 
-    private func areModifierKeysStillPressed() -> Bool {
-        let keyCodes: [CGKeyCode] = [
-            CGKeyCode(kVK_Command),
-            CGKeyCode(kVK_RightCommand),
-            CGKeyCode(kVK_Shift),
-            CGKeyCode(kVK_RightShift),
-            CGKeyCode(kVK_Option),
-            CGKeyCode(kVK_RightOption),
-            CGKeyCode(kVK_Control),
-            CGKeyCode(kVK_RightControl)
-        ]
-        return keyCodes.contains { CGEventSource.keyState(.combinedSessionState, key: $0) }
-    }
-
-    private func resolveFallbackSelectionCopy(
-        targetPID: pid_t?,
-        previousChangeCount: Int,
-        previousClipboardString: String?,
-        previousPasteboardSnapshot: [NSPasteboardItem],
-        feedbackMessage: String,
-        attemptsRemaining: Int,
-        didRetryWithUntargetedCopy: Bool,
-        transform: @escaping (String) -> String
-    ) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) { [weak self] in
-            guard let self else { return }
-            let pasteboard = NSPasteboard.general
-            let currentString = pasteboard.string(forType: .string)
-            let fallbackSelectedText = Self.resolvedFallbackSelectionText(
-                pasteboardChanged: pasteboard.changeCount != previousChangeCount,
-                currentClipboardText: currentString,
-                previousClipboardText: previousClipboardString,
-                accessibilitySelectedText: self.selectedTextFromFocusedElement()
-            )
-            if let selectedText = fallbackSelectedText {
-                _ = self.copyTextToClipboard(
-                    transform(selectedText),
-                    feedbackMessage: feedbackMessage,
-                    forceFloatingFeedback: true,
-                    storeInHistory: true,
-                    feedbackStyle: self.floatingFeedbackStyle(for: feedbackMessage)
-                )
-                return
-            }
-
-            if attemptsRemaining == 0, !didRetryWithUntargetedCopy, targetPID != nil {
-                self.dispatchFallbackCopyKeystroke(targetPID: nil)
-                self.resolveFallbackSelectionCopy(
-                    targetPID: nil,
-                    previousChangeCount: previousChangeCount,
-                    previousClipboardString: previousClipboardString,
-                    previousPasteboardSnapshot: previousPasteboardSnapshot,
-                    feedbackMessage: feedbackMessage,
-                    attemptsRemaining: 5,
-                    didRetryWithUntargetedCopy: true,
-                    transform: transform
-                )
-                return
-            }
-
-            guard attemptsRemaining > 0 else {
-                self.restorePasteboardItems(previousPasteboardSnapshot)
-                NSSound.beep()
-                return
-            }
-
-            self.resolveFallbackSelectionCopy(
-                targetPID: targetPID,
-                previousChangeCount: previousChangeCount,
-                previousClipboardString: previousClipboardString,
-                previousPasteboardSnapshot: previousPasteboardSnapshot,
+        if let sourceText = Self.resolvedSpecialCopySourceText(
+            panelText: panelText,
+            clipboardText: NSPasteboard.general.string(forType: .string)
+        ) {
+            _ = copyTextToClipboard(
+                transform(sourceText),
                 feedbackMessage: feedbackMessage,
-                attemptsRemaining: attemptsRemaining - 1,
-                didRetryWithUntargetedCopy: didRetryWithUntargetedCopy,
-                transform: transform
+                forceFloatingFeedback: true,
+                storeInHistory: true,
+                feedbackStyle: floatingFeedbackStyle(for: feedbackMessage)
             )
+            return
         }
-    }
 
-    private func snapshotPasteboardItems() -> [NSPasteboardItem] {
-        let pasteboard = NSPasteboard.general
-        return (pasteboard.pasteboardItems ?? []).map { item in
-            let snapshot = NSPasteboardItem()
-            for type in item.types {
-                if let data = item.data(forType: type) {
-                    snapshot.setData(data, forType: type)
-                }
-            }
-            return snapshot
-        }
-    }
-
-    private func restorePasteboardItems(_ items: [NSPasteboardItem]) {
-        clipboardController.prepareForInternalPaste()
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        if !items.isEmpty {
-            pasteboard.writeObjects(items)
-        }
-        clipboardController.finishInternalPaste()
-    }
-
-    private func installPasteboardSentinel(_ sentinelText: String) {
-        clipboardController.prepareForInternalPaste()
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(sentinelText, forType: .string)
-        clipboardController.finishInternalPaste()
+        let _ = targetPID
+        NSSound.beep()
     }
     
     private func pasteSelectedItem(_ item: ClipboardItem) {
@@ -3115,7 +2924,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             if noteEditorIsOrphanedCodexDraft {
                 discardOrphanedCodexDraft()
             } else {
-                orphanCurrentCodexDraftWindow()
+                dismissStandaloneNoteEditorWindow(copyToClipboard: false)
             }
             return
         }
@@ -3445,28 +3254,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         )
     }
 
-    static func resolvedFallbackSelectionText(
-        pasteboardChanged: Bool,
-        currentClipboardText: String?,
-        previousClipboardText: String?,
-        accessibilitySelectedText: String?
+    static func resolvedSpecialCopySourceText(
+        panelText: String?,
+        clipboardText: String?
     ) -> String? {
-        if pasteboardChanged,
-           let currentClipboardText,
-           !currentClipboardText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return currentClipboardText
+        if let panelText,
+           !panelText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return panelText
         }
 
-        if let accessibilitySelectedText,
-           !accessibilitySelectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return accessibilitySelectedText
-        }
-
-        if let currentClipboardText,
-           let previousClipboardText,
-           currentClipboardText != previousClipboardText,
-           !currentClipboardText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return currentClipboardText
+        if let clipboardText,
+           !clipboardText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return clipboardText
         }
 
         return nil
