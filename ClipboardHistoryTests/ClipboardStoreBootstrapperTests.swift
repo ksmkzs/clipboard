@@ -22,6 +22,7 @@ final class ClipboardStoreBootstrapperTests: XCTestCase {
             noteDraftDirectory: base.appendingPathComponent("Notes", isDirectory: true),
             codexIntegrationDirectory: base.appendingPathComponent(".clipboardhistory/bin", isDirectory: true),
             codexCompletionDirectory: base.appendingPathComponent("Codex/Sessions", isDirectory: true),
+            codexSessionStateDirectory: base.appendingPathComponent("Codex/State", isDirectory: true),
             codexRequestDirectory: base.appendingPathComponent("Codex", isDirectory: true),
             codexOpenRequestURL: base.appendingPathComponent("Codex/open-request.txt"),
             codexHelperScriptURL: base.appendingPathComponent(".clipboardhistory/bin/clipboardhistory-codex-editor")

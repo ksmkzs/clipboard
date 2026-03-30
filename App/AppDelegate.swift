@@ -28,6 +28,40 @@ enum HotKeyRegistrationState: Equatable {
 final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWindowDelegate {
     typealias CodexIntegrationStatus = ClipboardCodexIntegrationStatus
 
+    struct CodexDraftContext: Equatable {
+        let sessionID: String
+        let projectRootURL: URL?
+
+        var shortSessionID: String {
+            String(sessionID.prefix(8)).uppercased()
+        }
+
+        var projectDisplayName: String {
+            projectRootURL?.lastPathComponent ?? "Unknown"
+        }
+
+        var projectDisplayPath: String {
+            guard let path = projectRootURL?.path else {
+                return "~"
+            }
+            let homePath = FileManager.default.homeDirectoryForCurrentUser.path
+            if path == homePath {
+                return "~"
+            }
+            if path.hasPrefix(homePath + "/") {
+                return "~" + path.dropFirst(homePath.count)
+            }
+            return path
+        }
+    }
+
+    struct CodexOpenRequest: Equatable {
+        let sessionID: String
+        let fileURL: URL
+        let projectRootURL: URL?
+        let sessionStateURL: URL?
+    }
+
     private enum LaunchArgument {
         static let openPanelOnLaunch = "--codex-open-panel-on-launch"
         static let openHelpOnLaunch = "--codex-open-help-on-launch"
@@ -71,9 +105,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     private var noteEditorItemID: UUID?
     private var noteEditorExternalFileURL: URL?
     private var noteEditorCompletionMarkerURL: URL?
+    private var noteEditorSessionStateURL: URL?
     private var noteEditorDraftText = ""
     private var noteEditorAutosaveWorkItem: DispatchWorkItem?
     private var noteEditorShouldCommitExternalDraft = false
+    private var noteEditorIsOrphanedCodexDraft = false
+    private var noteEditorCodexSessionID: String?
+    private var noteEditorCodexProjectRootURL: URL?
     private var lastClosedNoteEditorItemID: UUID?
     private var helpPanel: NSPanel?
     private var floatingFeedbackPanel: NSPanel?
@@ -83,6 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     private var floatingFeedbackDismissTask: DispatchWorkItem?
     private var helpRequestObserver: NSObjectProtocol?
     private var codexOpenRequestTimer: DispatchSourceTimer?
+    private var codexSessionStateMonitor: DispatchSourceTimer?
     private var suppressPanelAutoClose = false
     private var panelAutoCloseSuppressionTask: DispatchWorkItem?
     private var launchAutomationAutoCloseSuppressionTask: DispatchWorkItem?
@@ -186,7 +225,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             return
         }
 
-        openExternalCodexEditor(for: URL(fileURLWithPath: firstPath).standardizedFileURL)
+        let fileURL = URL(fileURLWithPath: firstPath).standardizedFileURL
+        openExternalCodexEditor(
+            for: fileURL,
+            sessionID: UUID().uuidString,
+            projectRootURL: fileURL.deletingLastPathComponent(),
+            sessionStateURL: nil
+        )
         sender.reply(toOpenOrPrint: .success)
     }
     
@@ -244,23 +289,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             return
         }
 
-        let lines = requestText
-            .split(separator: "\n", omittingEmptySubsequences: false)
-            .map(String.init)
-        guard lines.count >= 2 else {
-            try? FileManager.default.removeItem(at: requestURL)
-            return
-        }
-
-        let filePath = lines[1].trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !filePath.isEmpty else {
+        guard let request = Self.parseCodexOpenRequest(requestText) else {
             try? FileManager.default.removeItem(at: requestURL)
             return
         }
 
         try? FileManager.default.removeItem(at: requestURL)
         DispatchQueue.main.async { [weak self] in
-            self?.openExternalCodexEditor(for: URL(fileURLWithPath: filePath).standardizedFileURL)
+            self?.openExternalCodexEditor(
+                for: request.fileURL,
+                sessionID: request.sessionID,
+                projectRootURL: request.projectRootURL,
+                sessionStateURL: request.sessionStateURL
+            )
         }
     }
     
@@ -714,7 +755,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         guard sender == noteEditorWindowController?.window else {
             return true
         }
-        dismissStandaloneNoteEditorWindow(copyToClipboard: noteEditorExternalFileURL == nil)
+        closeStandaloneNoteEditor()
         return false
     }
 
@@ -2274,10 +2315,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             draft.joinLinesShortcut,
             draft.normalizeForCommandShortcut
         ]
+        let codexShortcuts = [
+            draft.orphanCodexDiscardShortcut
+        ]
 
         guard shortcutsAreUnique(globalShortcuts),
               shortcutsAreUnique(standardPanelShortcuts),
-              shortcutsAreUnique(editorShortcuts) else {
+              shortcutsAreUnique(editorShortcuts),
+              shortcutsAreUnique(codexShortcuts) else {
             throw SettingsMutationError.duplicateShortcut
         }
 
@@ -2345,6 +2390,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             settings.toggleMarkdownPreviewShortcut = draft.toggleMarkdownPreviewShortcut
             settings.joinLinesShortcut = draft.joinLinesShortcut
             settings.normalizeForCommandShortcut = draft.normalizeForCommandShortcut
+            settings.orphanCodexDiscardShortcut = draft.orphanCodexDiscardShortcut
             settings.interfaceZoomScale = draft.clampedInterfaceZoomScale
             settings.newNoteReopenBehavior = draft.newNoteReopenBehavior
             settings.interfaceThemePreset = draft.interfaceThemePreset
@@ -2372,7 +2418,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         let noteWasVisible = noteEditorWindowController?.window?.isVisible == true
         let noteFrame = noteEditorWindowController?.window?.frame
         let noteItemID = noteEditorItemID
+        let noteExternalFileURL = noteEditorExternalFileURL
         let noteDraft = noteEditorDraftText
+        let noteIsOrphanedCodexDraft = noteEditorIsOrphanedCodexDraft
+        let noteCodexSessionID = noteEditorCodexSessionID
+        let noteCodexProjectRootURL = noteEditorCodexProjectRootURL
 
         if let itemID = noteItemID, noteWasVisible {
             _ = dataManager.updateTextContent(noteDraft, for: itemID)
@@ -2410,6 +2460,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             let controller = makeNoteEditorWindowController(itemID: itemID)
             if let noteFrame, let window = controller.window {
                 window.setFrame(noteFrame, display: false)
+            }
+        } else if noteWasVisible, let externalFileURL = noteExternalFileURL {
+            noteEditorWindowController?.window?.orderOut(nil)
+            noteEditorWindowController = nil
+            let controller = makeExternalFileEditorWindowController(
+                fileURL: externalFileURL,
+                initialText: noteDraft,
+                isOrphaned: noteIsOrphanedCodexDraft,
+                codexContext: noteCodexSessionID.map {
+                    CodexDraftContext(sessionID: $0, projectRootURL: noteCodexProjectRootURL)
+                }
+            )
+            if let noteFrame, let window = controller.window {
+                window.setFrame(noteFrame, display: false)
+            }
+            if !noteIsOrphanedCodexDraft {
+                startCodexSessionStateMonitor()
             }
         }
 
@@ -2583,8 +2650,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         }
     }
 
-    private func openExternalCodexEditor(for fileURL: URL) {
+    private func openExternalCodexEditor(
+        for fileURL: URL,
+        sessionID: String,
+        projectRootURL: URL?,
+        sessionStateURL: URL?
+    ) {
         let standardizedURL = fileURL.standardizedFileURL
+        let standardizedProjectRootURL = (projectRootURL ?? standardizedURL.deletingLastPathComponent()).standardizedFileURL
+        let resolvedSessionStateURL = (sessionStateURL ?? codexSessionStateURL(for: sessionID)).standardizedFileURL
         do {
             try FileManager.default.createDirectory(
                 at: standardizedURL.deletingLastPathComponent(),
@@ -2601,6 +2675,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
            currentURL == standardizedURL,
            let window = noteEditorWindowController?.window,
            window.isVisible {
+            noteEditorCodexSessionID = sessionID
+            noteEditorCodexProjectRootURL = standardizedProjectRootURL
+            noteEditorSessionStateURL = resolvedSessionStateURL
+            startCodexSessionStateMonitor()
+            window.title = externalEditorWindowTitle(
+                for: standardizedURL,
+                isOrphaned: noteEditorIsOrphanedCodexDraft,
+                codexContext: currentCodexDraftContext()
+            )
             activateCurrentApp()
             noteEditorWindowController?.showWindow(nil)
             window.orderFront(nil)
@@ -2614,15 +2697,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
 
         noteEditorExternalFileURL = standardizedURL
         noteEditorCompletionMarkerURL = codexCompletionMarkerURL(for: standardizedURL)
+        noteEditorSessionStateURL = resolvedSessionStateURL
         noteEditorItemID = nil
         noteEditorDraftText = (try? String(contentsOf: standardizedURL, encoding: .utf8)) ?? ""
         noteEditorShouldCommitExternalDraft = false
+        noteEditorIsOrphanedCodexDraft = false
+        noteEditorCodexSessionID = sessionID
+        noteEditorCodexProjectRootURL = standardizedProjectRootURL
 
         suppressPanelAutoClose = true
         promoteAppForExternalEditorIfNeeded()
         NSApp.unhide(nil)
         activateCurrentApp()
-        let controller = makeExternalFileEditorWindowController(fileURL: standardizedURL)
+        let controller = makeExternalFileEditorWindowController(
+            fileURL: standardizedURL,
+            codexContext: currentCodexDraftContext()
+        )
         if let window = controller.window {
             if panel.isVisible {
                 let referenceFrame = panel.frame
@@ -2644,6 +2734,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         controller.window?.makeKeyAndOrderFront(nil)
         NSApp.unhide(nil)
         NSApp.activate(ignoringOtherApps: true)
+        startCodexSessionStateMonitor()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
             self?.suppressPanelAutoClose = false
         }
@@ -2812,7 +2903,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         noteEditorItemID = itemID
         noteEditorExternalFileURL = nil
         noteEditorCompletionMarkerURL = nil
+        noteEditorSessionStateURL = nil
         noteEditorShouldCommitExternalDraft = false
+        noteEditorIsOrphanedCodexDraft = false
+        noteEditorCodexSessionID = nil
+        noteEditorCodexProjectRootURL = nil
         let initialText = dataManager.loadWorkingNoteText(for: itemID)
             ?? dataManager.allItems().first(where: { $0.id == itemID }).flatMap(dataManager.resolvedText(for:))
             ?? ""
@@ -2822,6 +2917,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         let rootView = StandaloneNoteEditorView(
             initialText: initialText,
             appDelegate: self,
+            codexContext: nil,
             commitMode: .pasteToTarget,
             onDraftChange: { [weak self] text in
                 self?.noteEditorDraftText = text
@@ -2832,7 +2928,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             },
             onClose: { [weak self] in
                 self?.closeStandaloneNoteEditor()
-            }
+            },
+            onDiscardOrphanCodex: nil
         )
         .modelContainer(sharedContainer)
 
@@ -2847,42 +2944,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         window.level = .normal
         window.representedURL = dataManager.workingNoteFileURL(for: itemID)
         window.delegate = self
-        window.standardWindowButton(.closeButton)?.target = self
-        window.standardWindowButton(.closeButton)?.action = #selector(handleNoteEditorCloseButton(_:))
 
         let controller = NSWindowController(window: window)
         noteEditorWindowController = controller
         return controller
     }
 
-    private func makeExternalFileEditorWindowController(fileURL: URL) -> NSWindowController {
+    private func makeExternalFileEditorWindowController(
+        fileURL: URL,
+        initialText: String? = nil,
+        isOrphaned: Bool = false,
+        codexContext: CodexDraftContext? = nil
+    ) -> NSWindowController {
         noteEditorItemID = nil
         noteEditorExternalFileURL = fileURL
-        noteEditorCompletionMarkerURL = codexCompletionMarkerURL(for: fileURL)
+        noteEditorCompletionMarkerURL = isOrphaned ? nil : codexCompletionMarkerURL(for: fileURL)
         noteEditorShouldCommitExternalDraft = false
-        let initialText = (try? String(contentsOf: fileURL, encoding: .utf8)) ?? ""
-        noteEditorDraftText = initialText
+        noteEditorIsOrphanedCodexDraft = isOrphaned
+        let resolvedInitialText = initialText ?? ((try? String(contentsOf: fileURL, encoding: .utf8)) ?? "")
+        noteEditorDraftText = resolvedInitialText
 
         let rootView = StandaloneNoteEditorView(
-            initialText: initialText,
+            initialText: resolvedInitialText,
             appDelegate: self,
-            commitMode: .returnToCodex,
+            codexContext: codexContext,
+            commitMode: isOrphaned ? .orphanedCodex : .returnToCodex,
             onDraftChange: { [weak self] text in
                 self?.noteEditorDraftText = text
             },
             onCommit: { [weak self] text in
-                self?.commitExternalCodexDraft(text, fileURL: fileURL)
+                if isOrphaned {
+                    self?.copyOrphanedCodexDraftToClipboardAndClose(text)
+                } else {
+                    self?.commitExternalCodexDraft(text, fileURL: fileURL)
+                }
             },
             onClose: { [weak self] in
                 self?.closeStandaloneNoteEditor()
-            }
+            },
+            onDiscardOrphanCodex: isOrphaned ? { [weak self] in
+                self?.discardOrphanedCodexDraft()
+            } : nil
         )
         .modelContainer(sharedContainer)
 
         let hostingController = NSHostingController(rootView: rootView)
 
         let window = NSWindow(contentViewController: hostingController)
-        window.title = fileURL.lastPathComponent
+        window.title = externalEditorWindowTitle(for: fileURL, isOrphaned: isOrphaned, codexContext: codexContext)
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.setContentSize(NSSize(width: 720, height: 420))
         window.contentMinSize = NSSize(width: 620, height: 320)
@@ -2890,8 +2999,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         window.level = .normal
         window.representedURL = fileURL
         window.delegate = self
-        window.standardWindowButton(.closeButton)?.target = self
-        window.standardWindowButton(.closeButton)?.action = #selector(handleNoteEditorCloseButton(_:))
 
         let controller = NSWindowController(window: window)
         noteEditorWindowController = controller
@@ -2899,7 +3006,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     }
 
     private func closeStandaloneNoteEditor() {
-        dismissStandaloneNoteEditorWindow(copyToClipboard: noteEditorExternalFileURL == nil)
+        if noteEditorExternalFileURL != nil {
+            if noteEditorIsOrphanedCodexDraft {
+                discardOrphanedCodexDraft()
+            } else {
+                orphanCurrentCodexDraftWindow()
+            }
+            return
+        }
+        dismissStandaloneNoteEditorWindow(copyToClipboard: true)
     }
 
     private func finalizeNoteEditorSession(copyToClipboard: Bool) {
@@ -2938,12 +3053,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         }
     }
 
-    @objc
-    private func handleNoteEditorCloseButton(_ sender: Any?) {
-        dismissStandaloneNoteEditorWindow(copyToClipboard: noteEditorExternalFileURL == nil)
-    }
-
-    private func dismissStandaloneNoteEditorWindow(copyToClipboard: Bool) {
+    private func dismissStandaloneNoteEditorWindow(
+        copyToClipboard: Bool,
+        saveOrphanedCodexDraftToClipboard: Bool = false
+    ) {
         guard let controller = noteEditorWindowController,
               let window = controller.window else {
             return
@@ -2952,7 +3065,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         let itemID = noteEditorItemID
         let externalFileURL = noteEditorExternalFileURL
         let completionMarkerURL = noteEditorCompletionMarkerURL
+        let sessionStateURL = noteEditorSessionStateURL
         let shouldCommitExternalDraft = noteEditorShouldCommitExternalDraft
+        let isOrphanedCodexDraft = noteEditorIsOrphanedCodexDraft
         let finalText = noteEditorDraftText
         noteEditorAutosaveWorkItem?.cancel()
         noteEditorAutosaveWorkItem = nil
@@ -2960,7 +3075,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         noteEditorItemID = nil
         noteEditorExternalFileURL = nil
         noteEditorCompletionMarkerURL = nil
+        noteEditorSessionStateURL = nil
         noteEditorShouldCommitExternalDraft = false
+        noteEditorIsOrphanedCodexDraft = false
+        noteEditorCodexSessionID = nil
+        noteEditorCodexProjectRootURL = nil
         noteEditorDraftText = ""
         noteEditorWindowController = nil
 
@@ -2969,16 +3088,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
 
         DispatchQueue.main.async { [weak self] in
             if let externalFileURL {
-                switch Self.externalEditorCloseOutcome(commitRequested: shouldCommitExternalDraft) {
+                self?.stopCodexSessionStateMonitor()
+                switch Self.externalEditorCloseOutcome(
+                    commitRequested: shouldCommitExternalDraft,
+                    isOrphaned: isOrphanedCodexDraft
+                ) {
                 case .persistAndSignal:
                     _ = self?.saveExternalEditorText(finalText, to: externalFileURL)
                     if let completionMarkerURL {
                         self?.signalCodexCompletionMarker(at: completionMarkerURL)
                     }
+                case .discardOrphan:
+                    if saveOrphanedCodexDraftToClipboard,
+                       !finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        self?.copyTextToClipboard(finalText, feedbackMessage: "Copied")
+                    }
                 case .signalOnly:
                     if let completionMarkerURL {
                         self?.signalCodexCompletionMarker(at: completionMarkerURL)
                     }
+                }
+                if let sessionStateURL {
+                    try? FileManager.default.removeItem(at: sessionStateURL)
                 }
                 self?.restoreAccessoryActivationPolicyIfNeeded()
             } else {
@@ -3010,6 +3141,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         noteEditorShouldCommitExternalDraft = true
         _ = saveExternalEditorText(text, to: fileURL)
         dismissStandaloneNoteEditorWindow(copyToClipboard: false)
+    }
+
+    private func copyOrphanedCodexDraftToClipboardAndClose(_ text: String) {
+        noteEditorDraftText = text
+        dismissStandaloneNoteEditorWindow(
+            copyToClipboard: false,
+            saveOrphanedCodexDraftToClipboard: true
+        )
+    }
+
+    private func discardOrphanedCodexDraft() {
+        dismissStandaloneNoteEditorWindow(copyToClipboard: false)
+    }
+
+    private func orphanCurrentCodexDraftWindow() {
+        guard let externalFileURL = noteEditorExternalFileURL,
+              !noteEditorIsOrphanedCodexDraft,
+              let controller = noteEditorWindowController,
+              let window = controller.window else {
+            return
+        }
+
+        stopCodexSessionStateMonitor()
+        if let completionMarkerURL = noteEditorCompletionMarkerURL {
+            signalCodexCompletionMarker(at: completionMarkerURL)
+        }
+        noteEditorCompletionMarkerURL = nil
+        noteEditorSessionStateURL = nil
+        noteEditorShouldCommitExternalDraft = false
+        noteEditorIsOrphanedCodexDraft = true
+        let codexContext = currentCodexDraftContext()
+
+        let hostingController = NSHostingController(
+            rootView: AnyView(
+                StandaloneNoteEditorView(
+                    initialText: noteEditorDraftText,
+                    appDelegate: self,
+                    codexContext: codexContext,
+                    commitMode: .orphanedCodex,
+                    onDraftChange: { [weak self] text in
+                        self?.noteEditorDraftText = text
+                    },
+                    onCommit: { [weak self] text in
+                        self?.copyOrphanedCodexDraftToClipboardAndClose(text)
+                    },
+                    onClose: { [weak self] in
+                        self?.closeStandaloneNoteEditor()
+                    },
+                    onDiscardOrphanCodex: { [weak self] in
+                        self?.discardOrphanedCodexDraft()
+                    }
+                )
+                .modelContainer(sharedContainer)
+            )
+        )
+        window.contentViewController = hostingController
+        window.title = externalEditorWindowTitle(for: externalFileURL, isOrphaned: true, codexContext: codexContext)
+        activateCurrentApp()
+        window.orderFrontRegardless()
+        window.makeKeyAndOrderFront(nil)
     }
 
     @discardableResult
@@ -3047,13 +3238,104 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         }
     }
 
+    private func codexSessionStateURL(for sessionID: String) -> URL {
+        let storePaths = ClipboardStorePaths.default()
+        try? storePaths.ensureDirectories()
+        return storePaths.codexSessionStateDirectory.appendingPathComponent("\(sessionID).alive")
+    }
+
+    private func startCodexSessionStateMonitor() {
+        stopCodexSessionStateMonitor()
+        guard noteEditorExternalFileURL != nil,
+              !noteEditorIsOrphanedCodexDraft,
+              let sessionStateURL = noteEditorSessionStateURL else {
+            return
+        }
+
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + 0.5, repeating: 0.5)
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            guard self.noteEditorExternalFileURL != nil,
+                  !self.noteEditorIsOrphanedCodexDraft else {
+                self.stopCodexSessionStateMonitor()
+                return
+            }
+
+            if !FileManager.default.fileExists(atPath: sessionStateURL.path) {
+                self.orphanCurrentCodexDraftWindow()
+            }
+        }
+        codexSessionStateMonitor = timer
+        timer.resume()
+    }
+
+    private func stopCodexSessionStateMonitor() {
+        codexSessionStateMonitor?.cancel()
+        codexSessionStateMonitor = nil
+    }
+
     enum ExternalEditorCloseOutcome: Equatable {
         case persistAndSignal
         case signalOnly
+        case discardOrphan
     }
 
-    static func externalEditorCloseOutcome(commitRequested: Bool) -> ExternalEditorCloseOutcome {
-        commitRequested ? .persistAndSignal : .signalOnly
+    static func externalEditorCloseOutcome(commitRequested: Bool, isOrphaned: Bool) -> ExternalEditorCloseOutcome {
+        if commitRequested {
+            return .persistAndSignal
+        }
+        if isOrphaned {
+            return .discardOrphan
+        }
+        return .signalOnly
+    }
+
+    private func currentCodexDraftContext() -> CodexDraftContext? {
+        guard let noteEditorCodexSessionID else {
+            return nil
+        }
+        return CodexDraftContext(
+            sessionID: noteEditorCodexSessionID,
+            projectRootURL: noteEditorCodexProjectRootURL
+        )
+    }
+
+    private func externalEditorWindowTitle(
+        for fileURL: URL,
+        isOrphaned: Bool,
+        codexContext: CodexDraftContext?
+    ) -> String {
+        if let codexContext {
+            let prefix = isOrphaned ? "Codex Disconnected" : "Codex"
+            return "\(prefix) • \(codexContext.projectDisplayName) • \(codexContext.shortSessionID)"
+        }
+        return isOrphaned ? "Disconnected - \(fileURL.lastPathComponent)" : fileURL.lastPathComponent
+    }
+
+    static func parseCodexOpenRequest(_ requestText: String) -> CodexOpenRequest? {
+        let lines = requestText
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map(String.init)
+
+        guard lines.count >= 2 else {
+            return nil
+        }
+
+        let sessionID = lines[0].trimmingCharacters(in: .whitespacesAndNewlines)
+        let filePath = lines[1].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !sessionID.isEmpty, !filePath.isEmpty else {
+            return nil
+        }
+
+        let projectRootPath = lines.count >= 3 ? lines[2].trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        let sessionStatePath = lines.count >= 4 ? lines[3].trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        return CodexOpenRequest(
+            sessionID: sessionID,
+            fileURL: URL(fileURLWithPath: filePath).standardizedFileURL,
+            projectRootURL: projectRootPath.isEmpty ? nil : URL(fileURLWithPath: projectRootPath).standardizedFileURL,
+            sessionStateURL: sessionStatePath.isEmpty ? nil : URL(fileURLWithPath: sessionStatePath).standardizedFileURL
+        )
     }
 
     func codexIntegrationStatus(inspectShellConfig: Bool = false) -> CodexIntegrationStatus {

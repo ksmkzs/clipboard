@@ -97,13 +97,23 @@ struct CodexIntegrationManager {
         DONE_FILE="$SUPPORT_DIR/$HASH.done"
         /bin/rm -f "$DONE_FILE"
 
+        STATE_DIR="$HOME/Library/Application Support/ClipboardHistory/Codex/State"
+        /bin/mkdir -p "$STATE_DIR"
+
         if [ ! -f "$FILE_PATH" ]; then
           : > "$FILE_PATH"
         fi
 
         REQUEST_FILE="$HOME/Library/Application Support/ClipboardHistory/Codex/open-request.txt"
         REQUEST_ID="$(/usr/bin/uuidgen)"
-        printf '%s\\n%s\\n' "$REQUEST_ID" "$FILE_PATH" > "$REQUEST_FILE"
+        PROJECT_ROOT="$PWD"
+        STATE_FILE="$STATE_DIR/$REQUEST_ID.alive"
+        : > "$STATE_FILE"
+        cleanup() {
+          /bin/rm -f "$STATE_FILE"
+        }
+        trap cleanup EXIT HUP INT TERM
+        printf '%s\\n%s\\n%s\\n%s\\n' "$REQUEST_ID" "$FILE_PATH" "$PROJECT_ROOT" "$STATE_FILE" > "$REQUEST_FILE"
 
         if ! /usr/bin/open -b "kazushi-koshimo.ClipboardHistory"; then
           if [ -d "/Applications/ClipboardHistory.app" ]; then

@@ -208,16 +208,19 @@ struct EditorTextView: NSViewRepresentable {
     let toggleMarkdownPreviewShortcut: HotKeyManager.Shortcut
     let joinLinesShortcut: HotKeyManager.Shortcut
     let normalizeForCommandShortcut: HotKeyManager.Shortcut
+    let orphanCodexDiscardShortcut: HotKeyManager.Shortcut
     let onEscape: () -> Void
     let onCommit: () -> Void
+    let onDiscardOrphanCodex: (() -> Void)?
     let onToggleMarkdownPreview: () -> Void
     let onToggleHelp: () -> Void
     let onZoomIn: () -> Void
     let onZoomOut: () -> Void
     let onResetZoom: () -> Void
+    let onSelectionChange: (Int) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text)
+        Coordinator(text: $text, onSelectionChange: onSelectionChange)
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -261,8 +264,10 @@ struct EditorTextView: NSViewRepresentable {
         textView.toggleMarkdownPreviewShortcut = toggleMarkdownPreviewShortcut
         textView.joinLinesShortcut = joinLinesShortcut
         textView.normalizeForCommandShortcut = normalizeForCommandShortcut
+        textView.orphanCodexDiscardShortcut = orphanCodexDiscardShortcut
         textView.onEscape = onEscape
         textView.onCommit = onCommit
+        textView.onDiscardOrphanCodex = onDiscardOrphanCodex
         textView.onToggleMarkdownPreview = onToggleMarkdownPreview
         textView.onToggleHelp = onToggleHelp
         textView.onZoomIn = onZoomIn
@@ -292,13 +297,16 @@ struct EditorTextView: NSViewRepresentable {
         textView.toggleMarkdownPreviewShortcut = toggleMarkdownPreviewShortcut
         textView.joinLinesShortcut = joinLinesShortcut
         textView.normalizeForCommandShortcut = normalizeForCommandShortcut
+        textView.orphanCodexDiscardShortcut = orphanCodexDiscardShortcut
         textView.onEscape = onEscape
         textView.onCommit = onCommit
+        textView.onDiscardOrphanCodex = onDiscardOrphanCodex
         textView.onToggleMarkdownPreview = onToggleMarkdownPreview
         textView.onToggleHelp = onToggleHelp
         textView.onZoomIn = onZoomIn
         textView.onZoomOut = onZoomOut
         textView.onResetZoom = onResetZoom
+        context.coordinator.onSelectionChange = onSelectionChange
         if text != context.coordinator.lastSyncedText {
             textView.string = text
             context.coordinator.lastSyncedText = text
@@ -316,10 +324,13 @@ struct EditorTextView: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         @Binding var text: String
         var lastSyncedText: String
+        var onSelectionChange: (Int) -> Void
+        private var lastSelectionLocation: Int?
 
-        init(text: Binding<String>) {
+        init(text: Binding<String>, onSelectionChange: @escaping (Int) -> Void) {
             _text = text
             lastSyncedText = text.wrappedValue
+            self.onSelectionChange = onSelectionChange
         }
 
         func textDidChange(_ notification: Notification) {
@@ -330,6 +341,35 @@ struct EditorTextView: NSViewRepresentable {
             textView.undoManager?.setActionName("Edit Text")
             textView.breakUndoCoalescing()
         }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            let location = textView.selectedRange().location
+            guard location != lastSelectionLocation else { return }
+            lastSelectionLocation = location
+            onSelectionChange(location)
+        }
+    }
+}
+
+enum MarkdownPreviewScrollSync {
+    static func progress(for text: String, selectionLocation: Int) -> CGFloat {
+        let normalized = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        let nsText = normalized as NSString
+        guard nsText.length > 0 else { return 0 }
+
+        let clampedLocation = max(0, min(selectionLocation, nsText.length))
+        let prefix = nsText.substring(to: clampedLocation)
+        let currentLineIndex = prefix.reduce(into: 0) { count, character in
+            if character == "\n" {
+                count += 1
+            }
+        }
+        let totalLines = max(1, normalized.components(separatedBy: "\n").count)
+        guard totalLines > 1 else { return 0 }
+        return min(1, max(0, CGFloat(currentLineIndex) / CGFloat(totalLines - 1)))
     }
 }
 
@@ -339,6 +379,7 @@ struct MarkdownPreviewSidebar: View {
     let width: CGFloat
     let minHeight: CGFloat
     let fontScale: CGFloat
+    let scrollProgress: CGFloat?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -349,7 +390,7 @@ struct MarkdownPreviewSidebar: View {
                     .padding(.horizontal, 2)
             }
 
-            MarkdownWebPreview(markdown: markdown, fontScale: fontScale)
+            MarkdownWebPreview(markdown: markdown, fontScale: fontScale, scrollProgress: scrollProgress)
                 .frame(width: width)
                 .frame(minHeight: minHeight, alignment: .topLeading)
                 .background(
@@ -367,6 +408,7 @@ struct MarkdownPreviewSidebar: View {
 struct MarkdownWebPreview: NSViewRepresentable {
     let markdown: String
     let fontScale: CGFloat
+    let scrollProgress: CGFloat?
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -381,23 +423,31 @@ struct MarkdownWebPreview: NSViewRepresentable {
         if #available(macOS 13.3, *) {
             webView.isInspectable = false
         }
-        load(markdown, into: webView, coordinator: context.coordinator)
+        load(markdown, scrollProgress: scrollProgress, into: webView, coordinator: context.coordinator)
         return webView
     }
 
     func updateNSView(_ nsView: WKWebView, context: Context) {
-        load(markdown, into: nsView, coordinator: context.coordinator)
+        load(markdown, scrollProgress: scrollProgress, into: nsView, coordinator: context.coordinator)
     }
 
-    private func load(_ markdown: String, into webView: WKWebView, coordinator: Coordinator) {
+    private func load(_ markdown: String, scrollProgress: CGFloat?, into webView: WKWebView, coordinator: Coordinator) {
         let html = MarkdownPreviewRenderer.documentHTML(for: markdown, fontScale: fontScale)
-        guard coordinator.lastHTML != html else { return }
-        coordinator.lastHTML = html
-        webView.loadHTMLString(html, baseURL: nil)
+        let clampedScrollProgress = scrollProgress.map { min(1, max(0, $0)) }
+        coordinator.pendingScrollProgress = clampedScrollProgress
+        if coordinator.lastHTML != html {
+            coordinator.lastHTML = html
+            coordinator.appliedScrollProgress = nil
+            webView.loadHTMLString(html, baseURL: nil)
+            return
+        }
+        coordinator.applyScrollProgress(clampedScrollProgress, to: webView)
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate {
         var lastHTML = ""
+        var pendingScrollProgress: CGFloat?
+        var appliedScrollProgress: CGFloat?
 
         func webView(
             _ webView: WKWebView,
@@ -411,6 +461,26 @@ struct MarkdownWebPreview: NSViewRepresentable {
                 return
             }
             decisionHandler(.allow)
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            applyScrollProgress(pendingScrollProgress, to: webView, force: true)
+        }
+
+        func applyScrollProgress(_ progress: CGFloat?, to webView: WKWebView, force: Bool = false) {
+            let clamped = progress.map { min(1, max(0, $0)) }
+            guard force || appliedScrollProgress != clamped else { return }
+            let progressValue = Double(clamped ?? 0)
+            let script = """
+            (function() {
+              const root = document.scrollingElement || document.documentElement || document.body;
+              if (!root) { return; }
+              const maxScroll = Math.max(0, root.scrollHeight - window.innerHeight);
+              root.scrollTop = maxScroll * \(progressValue);
+            })();
+            """
+            webView.evaluateJavaScript(script, completionHandler: nil)
+            appliedScrollProgress = clamped
         }
     }
 }
@@ -731,6 +801,7 @@ final class EditorNSTextView: NSTextView {
 
     var onEscape: (() -> Void)?
     var onCommit: (() -> Void)?
+    var onDiscardOrphanCodex: (() -> Void)?
     var onToggleMarkdownPreview: (() -> Void)?
     var onToggleHelp: (() -> Void)?
     var onZoomIn: (() -> Void)?
@@ -744,6 +815,7 @@ final class EditorNSTextView: NSTextView {
     var toggleMarkdownPreviewShortcut = AppSettings.default.toggleMarkdownPreviewShortcut
     var joinLinesShortcut = AppSettings.default.joinLinesShortcut
     var normalizeForCommandShortcut = AppSettings.default.normalizeForCommandShortcut
+    var orphanCodexDiscardShortcut = AppSettings.defaultOrphanCodexDiscardShortcut
     private var editorCommandObserver: NSObjectProtocol?
 
     deinit {
@@ -876,6 +948,9 @@ final class EditorNSTextView: NSTextView {
             return true
         } else if HotKeyManager.event(event, matches: normalizeForCommandShortcut) {
             applyEditorCommand(.normalizeForCommand)
+            return true
+        } else if onDiscardOrphanCodex != nil, HotKeyManager.event(event, matches: orphanCodexDiscardShortcut) {
+            onDiscardOrphanCodex?()
             return true
         } else if key == "a", !modifiers.contains(.shift), !modifiers.contains(.option), !modifiers.contains(.control) {
             selectAll(nil)

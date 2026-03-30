@@ -32,6 +32,7 @@ struct SettingsView: View {
         case toggleMarkdownPreview
         case joinLines
         case normalizeForCommand
+        case orphanCodexDiscard
 
         var id: Self { self }
     }
@@ -361,6 +362,14 @@ struct SettingsView: View {
                         title: t("Normalize whitespace", "選択中の項目の空白を整形"),
                         target: .normalizeForCommand,
                         shortcut: binding(for: .normalizeForCommand)
+                    )
+                }
+
+                shortcutGroup(title: t("Codex Window", "Codex ウィンドウ")) {
+                    shortcutRow(
+                        title: t("Discard orphaned draft", "切断された下書きを削除"),
+                        target: .orphanCodexDiscard,
+                        shortcut: binding(for: .orphanCodexDiscard)
                     )
                 }
             },
@@ -723,6 +732,8 @@ struct SettingsView: View {
             return t("Join into one sentence", "選択中の項目を一文に整形")
         case .normalizeForCommand:
             return t("Normalize whitespace", "選択中の項目の空白を整形")
+        case .orphanCodexDiscard:
+            return t("Discard orphaned draft", "切断された下書きを削除")
         }
     }
 
@@ -839,6 +850,11 @@ struct SettingsView: View {
                 en: ["Scope: editor window", "Action: keep line breaks and trim each line edge"],
                 ja: ["対象: 編集ウィンドウ", "動作: 改行は維持しつつ各行の端を削る"]
             )
+        case .orphanCodexDiscard:
+            return items(
+                en: ["Scope: orphaned Codex window", "Action: discard the disconnected draft and close the window", "Default: \(HotKeyManager.displayString(for: AppSettings.defaultOrphanCodexDiscardShortcut))"],
+                ja: ["対象: 切断済みの Codex ウィンドウ", "動作: 接続が切れた下書きを破棄して閉じる", "初期値: \(HotKeyManager.displayString(for: AppSettings.defaultOrphanCodexDiscardShortcut))"]
+            )
         }
     }
 
@@ -890,6 +906,8 @@ struct SettingsView: View {
                     return draftSettings.joinLinesShortcut
                 case .normalizeForCommand:
                     return draftSettings.normalizeForCommandShortcut
+                case .orphanCodexDiscard:
+                    return draftSettings.orphanCodexDiscardShortcut
                 }
             },
             set: { newValue in
@@ -934,6 +952,8 @@ struct SettingsView: View {
                     draftSettings.joinLinesShortcut = newValue
                 case .normalizeForCommand:
                     draftSettings.normalizeForCommandShortcut = newValue
+                case .orphanCodexDiscard:
+                    draftSettings.orphanCodexDiscardShortcut = newValue
                 }
             }
         )
@@ -1136,6 +1156,12 @@ struct SettingsView: View {
                     (t("Markdown preview", "Markdown プレビュー"), draft.toggleMarkdownPreviewShortcut),
                     (t("Join into one sentence", "選択中の項目を一文に整形"), draft.joinLinesShortcut),
                     (t("Normalize whitespace", "選択中の項目の空白を整形"), draft.normalizeForCommandShortcut)
+                ]
+            ),
+            (
+                t("Codex commands", "Codex コマンド"),
+                [
+                    (t("Discard orphaned draft", "切断された下書きを削除"), draft.orphanCodexDiscardShortcut)
                 ]
             )
         ]
@@ -1347,6 +1373,8 @@ struct SettingsView: View {
             return AppSettings.default.joinLinesShortcut
         case .normalizeForCommand:
             return AppSettings.default.normalizeForCommandShortcut
+        case .orphanCodexDiscard:
+            return AppSettings.default.orphanCodexDiscardShortcut
         }
     }
 }

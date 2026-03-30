@@ -65,6 +65,10 @@ struct AppSettings: Equatable {
         keyCode: UInt32(kVK_ANSI_C),
         modifiers: UInt32(shiftKey | cmdKey)
     )
+    static let defaultOrphanCodexDiscardShortcut = HotKeyManager.Shortcut(
+        keyCode: UInt32(kVK_ANSI_D),
+        modifiers: UInt32(shiftKey | cmdKey)
+    )
     static let legacyPanelShortcut = HotKeyManager.Shortcut(
         keyCode: UInt32(kVK_ANSI_V),
         modifiers: UInt32(controlKey | optionKey | shiftKey)
@@ -114,6 +118,7 @@ struct AppSettings: Equatable {
     var toggleMarkdownPreviewShortcut: HotKeyManager.Shortcut
     var joinLinesShortcut: HotKeyManager.Shortcut
     var normalizeForCommandShortcut: HotKeyManager.Shortcut
+    var orphanCodexDiscardShortcut: HotKeyManager.Shortcut
     var launchAtLogin: Bool
     var translationTargetLanguage: String
     var historyLimit: Int
@@ -198,6 +203,7 @@ struct AppSettings: Equatable {
             keyCode: UInt32(kVK_ANSI_C),
             modifiers: UInt32(cmdKey | shiftKey)
         ),
+        orphanCodexDiscardShortcut: defaultOrphanCodexDiscardShortcut,
         launchAtLogin: false,
         translationTargetLanguage: "ja",
         historyLimit: 150,
@@ -468,6 +474,7 @@ final class UserDefaultsAppSettingsStore: AppSettingsStore {
         static let toggleMarkdownPreviewShortcut = "hotkey.editor.toggleMarkdownPreview"
         static let joinLinesShortcut = "hotkey.editor.joinLines"
         static let normalizeForCommandShortcut = "hotkey.editor.normalizeForCommand"
+        static let orphanCodexDiscardShortcut = "hotkey.codex.orphanDiscard"
         static let launchAtLogin = "app.launchAtLogin"
         static let translationTargetLanguage = "translation.targetLanguage"
         static let historyLimit = "history.limit"
@@ -478,7 +485,7 @@ final class UserDefaultsAppSettingsStore: AppSettingsStore {
     }
 
     private let userDefaults: UserDefaults
-    private static let currentMigrationVersion = 8
+    private static let currentMigrationVersion = 9
 
     init(userDefaults: UserDefaults = .standard) {
         self.userDefaults = userDefaults
@@ -553,6 +560,9 @@ final class UserDefaultsAppSettingsStore: AppSettingsStore {
         if let shortcut = loadShortcut(forKey: Key.normalizeForCommandShortcut) {
             settings.normalizeForCommandShortcut = shortcut
         }
+        if let shortcut = loadShortcut(forKey: Key.orphanCodexDiscardShortcut) {
+            settings.orphanCodexDiscardShortcut = shortcut
+        }
         if userDefaults.object(forKey: Key.launchAtLogin) != nil {
             settings.launchAtLogin = userDefaults.bool(forKey: Key.launchAtLogin)
         }
@@ -612,6 +622,7 @@ final class UserDefaultsAppSettingsStore: AppSettingsStore {
         saveShortcut(settings.toggleMarkdownPreviewShortcut, forKey: Key.toggleMarkdownPreviewShortcut)
         saveShortcut(settings.joinLinesShortcut, forKey: Key.joinLinesShortcut)
         saveShortcut(settings.normalizeForCommandShortcut, forKey: Key.normalizeForCommandShortcut)
+        saveShortcut(settings.orphanCodexDiscardShortcut, forKey: Key.orphanCodexDiscardShortcut)
         userDefaults.set(settings.launchAtLogin, forKey: Key.launchAtLogin)
         userDefaults.set(settings.translationTargetLanguage, forKey: Key.translationTargetLanguage)
         userDefaults.set(max(1, settings.historyLimit), forKey: Key.historyLimit)
@@ -690,6 +701,10 @@ final class UserDefaultsAppSettingsStore: AppSettingsStore {
         }
         settings.globalCopyJoinedEnabled = true
         settings.globalCopyNormalizedEnabled = true
+        if loadShortcut(forKey: Key.orphanCodexDiscardShortcut) == nil {
+            settings.orphanCodexDiscardShortcut = AppSettings.defaultOrphanCodexDiscardShortcut
+            didMigrate = true
+        }
 
         userDefaults.set(Self.currentMigrationVersion, forKey: Key.migrationVersion)
         return didMigrate

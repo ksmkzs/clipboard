@@ -111,12 +111,59 @@ final class AppDelegateTargetSelectionTests: XCTestCase {
 
     func testExternalEditorCloseOutcomePersistsOnlyWhenCommitRequested() {
         XCTAssertEqual(
-            AppDelegate.externalEditorCloseOutcome(commitRequested: true),
+            AppDelegate.externalEditorCloseOutcome(commitRequested: true, isOrphaned: false),
             .persistAndSignal
         )
         XCTAssertEqual(
-            AppDelegate.externalEditorCloseOutcome(commitRequested: false),
+            AppDelegate.externalEditorCloseOutcome(commitRequested: false, isOrphaned: false),
             .signalOnly
         )
+        XCTAssertEqual(
+            AppDelegate.externalEditorCloseOutcome(commitRequested: false, isOrphaned: true),
+            .discardOrphan
+        )
+    }
+
+    func testParseCodexOpenRequestSupportsProjectRootMetadata() {
+        let request = """
+        12345678-1234-1234-1234-1234567890ab
+        /tmp/codex-draft.md
+        /Users/example/project
+        """
+
+        let parsed = AppDelegate.parseCodexOpenRequest(request)
+
+        XCTAssertEqual(parsed?.sessionID, "12345678-1234-1234-1234-1234567890ab")
+        XCTAssertEqual(parsed?.fileURL.path, "/tmp/codex-draft.md")
+        XCTAssertEqual(parsed?.projectRootURL?.path, "/Users/example/project")
+    }
+
+    func testParseCodexOpenRequestSupportsSessionStateMetadata() {
+        let request = """
+        12345678-1234-1234-1234-1234567890ab
+        /tmp/codex-draft.md
+        /Users/example/project
+        /Users/example/Library/Application Support/ClipboardHistory/Codex/State/12345678-1234-1234-1234-1234567890ab.alive
+        """
+
+        let parsed = AppDelegate.parseCodexOpenRequest(request)
+
+        XCTAssertEqual(parsed?.sessionID, "12345678-1234-1234-1234-1234567890ab")
+        XCTAssertEqual(parsed?.fileURL.path, "/tmp/codex-draft.md")
+        XCTAssertEqual(parsed?.projectRootURL?.path, "/Users/example/project")
+        XCTAssertEqual(parsed?.sessionStateURL?.lastPathComponent, "12345678-1234-1234-1234-1234567890ab.alive")
+    }
+
+    func testParseCodexOpenRequestSupportsLegacyTwoLineFormat() {
+        let request = """
+        12345678-1234-1234-1234-1234567890ab
+        /tmp/codex-draft.md
+        """
+
+        let parsed = AppDelegate.parseCodexOpenRequest(request)
+
+        XCTAssertEqual(parsed?.sessionID, "12345678-1234-1234-1234-1234567890ab")
+        XCTAssertEqual(parsed?.fileURL.path, "/tmp/codex-draft.md")
+        XCTAssertNil(parsed?.projectRootURL)
     }
 }

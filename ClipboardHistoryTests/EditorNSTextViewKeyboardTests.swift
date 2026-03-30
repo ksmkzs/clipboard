@@ -237,6 +237,34 @@ final class EditorNSTextViewKeyboardTests: XCTestCase {
         XCTAssertTrue(didTogglePreview)
     }
 
+    func testCommandShiftDCallsOrphanDiscardHandler() {
+        let editor = makeEditor(text: "draft", selection: NSRange(location: 0, length: 0))
+        var didDiscard = false
+        editor.orphanCodexDiscardShortcut = AppSettings.defaultOrphanCodexDiscardShortcut
+        editor.onDiscardOrphanCodex = {
+            didDiscard = true
+        }
+
+        let handled = editor.performKeyEquivalent(
+            with: keyEvent(
+                keyCode: UInt16(kVK_ANSI_D),
+                characters: "d",
+                modifiers: [.command, .shift]
+            )
+        )
+
+        XCTAssertTrue(handled)
+        XCTAssertTrue(didDiscard)
+    }
+
+    func testMarkdownPreviewScrollProgressTracksSelectionByLine() {
+        let text = "alpha\nbeta\ngamma\ndelta"
+
+        XCTAssertEqual(MarkdownPreviewScrollSync.progress(for: text, selectionLocation: 0), 0, accuracy: 0.0001)
+        XCTAssertEqual(MarkdownPreviewScrollSync.progress(for: text, selectionLocation: 8), 1.0 / 3.0, accuracy: 0.0001)
+        XCTAssertEqual(MarkdownPreviewScrollSync.progress(for: text, selectionLocation: (text as NSString).length), 1, accuracy: 0.0001)
+    }
+
     func testCommandLeftMovesToBeginningOfLine() {
         let editor = makeEditor(text: "one\ntwo\nthree", selection: NSRange(location: 6, length: 0))
 

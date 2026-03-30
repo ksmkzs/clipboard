@@ -193,6 +193,35 @@ Initial robustness tasks:
   - `enter_paste_smoke.sh`
   - `enter_paste_target_switch_smoke.sh`
 
+## 6.1 Markdown Preview Backlog
+
+現在の Markdown preview は、実用優先であり、完全な GitHub Flavored Markdown clone ではありません。
+
+現時点で実装済み:
+
+- heading
+- paragraph
+- soft break / hard break
+- unordered / ordered list
+- task-list checkbox
+- blockquote
+- fenced code block
+- inline code
+- link / image
+- bold / italic / strikethrough
+- editor の現在行に基づく概算 auto-scroll
+
+まだ gap がある、または完全保証していない項目:
+
+- table
+- nested list の fidelity
+- ordered list の start number
+- Markdown 内の raw HTML 混在
+- quote / code の edge case
+- image size / layout fidelity
+- editor と preview の pixel-perfect scroll sync
+- GitHub / Qiita と完全一致する rendering
+
 ## 7. Execution Order
 
 1. 上の specification inventory を固定する

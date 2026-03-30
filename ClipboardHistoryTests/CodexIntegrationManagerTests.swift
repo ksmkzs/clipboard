@@ -25,6 +25,7 @@ final class CodexIntegrationManagerTests: XCTestCase {
             noteDraftDirectory: supportDirectory.appendingPathComponent("ClipboardHistory/Notes", isDirectory: true),
             codexIntegrationDirectory: homeDirectory.appendingPathComponent(".clipboardhistory/bin", isDirectory: true),
             codexCompletionDirectory: supportDirectory.appendingPathComponent("ClipboardHistory/Codex/Sessions", isDirectory: true),
+            codexSessionStateDirectory: supportDirectory.appendingPathComponent("ClipboardHistory/Codex/State", isDirectory: true),
             codexRequestDirectory: supportDirectory.appendingPathComponent("ClipboardHistory/Codex", isDirectory: true),
             codexOpenRequestURL: supportDirectory.appendingPathComponent("ClipboardHistory/Codex/open-request.txt"),
             codexHelperScriptURL: homeDirectory.appendingPathComponent(".clipboardhistory/bin/clipboardhistory-codex-editor")

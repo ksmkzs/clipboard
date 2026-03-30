@@ -1353,6 +1353,7 @@ struct ClipboardHelpPanelContent: View {
                     markdownExample("*italic*")
                     markdownExample("- item")
                     markdownExample("1. item")
+                    markdownExample("- [ ] task")
                     markdownExample("`code`")
                     markdownExample("[clipboard](https://github.com/ksmkzs/clipboard)")
                     markdownExample("```md\\ncode block\\n```")
@@ -1379,7 +1380,7 @@ struct ClipboardHelpPanelContent: View {
                 .frame(minWidth: 120, alignment: .leading)
             Text("→")
                 .foregroundStyle(.secondary)
-            MarkdownWebPreview(markdown: source, fontScale: 0.84)
+            MarkdownWebPreview(markdown: source, fontScale: 0.84, scrollProgress: nil)
                 .frame(width: 178)
                 .frame(height: markdownExamplePreviewHeight(for: source), alignment: .topLeading)
                 .background(
@@ -1412,20 +1413,25 @@ struct StandaloneNoteEditorView: View {
     enum CommitMode {
         case pasteToTarget
         case returnToCodex
+        case orphanedCodex
     }
 
     private static let markdownPreviewSidebarWidth: CGFloat = 260
 
     let initialText: String
     @ObservedObject var appDelegate: AppDelegate
+    let codexContext: AppDelegate.CodexDraftContext?
     let commitMode: CommitMode
     let onDraftChange: (String) -> Void
     let onCommit: (String) -> Void
     let onClose: () -> Void
+    let onDiscardOrphanCodex: (() -> Void)?
 
     @State private var draftText = ""
     @State private var committedText = ""
     @State private var isMarkdownPreviewVisible = false
+    @State private var editorSelectionLocation = 0
+    @State private var markdownPreviewScrollProgress: CGFloat = 0
 
     private var zoomScale: CGFloat {
         CGFloat(appDelegate.settings.clampedInterfaceZoomScale)
@@ -1475,11 +1481,18 @@ struct StandaloneNoteEditorView: View {
         .onAppear(perform: loadCurrentText)
         .onChange(of: draftText) { _, newValue in
             onDraftChange(newValue)
+            markdownPreviewScrollProgress = MarkdownPreviewScrollSync.progress(
+                for: newValue,
+                selectionLocation: editorSelectionLocation
+            )
         }
     }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
+            if let codexContext, commitMode != .pasteToTarget {
+                codexMetadataRow(codexContext)
+            }
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 10) {
                     primaryHeaderRow
@@ -1495,6 +1508,51 @@ struct StandaloneNoteEditorView: View {
         .padding(.horizontal, scaled(12))
         .padding(.vertical, scaled(6))
         .background(theme.headerFill)
+    }
+
+    private func codexMetadataRow(_ codexContext: AppDelegate.CodexDraftContext) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) {
+                codexMetadataPill(
+                    icon: "folder",
+                    title: t("Project", "プロジェクト"),
+                    value: codexContext.projectDisplayPath
+                )
+                codexMetadataPill(
+                    icon: "number",
+                    title: t("Chat ID", "チャットID"),
+                    value: codexContext.shortSessionID
+                )
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 10) {
+                    codexMetadataPill(
+                        icon: "folder",
+                        title: t("Project", "プロジェクト"),
+                        value: codexContext.projectDisplayPath
+                    )
+                    codexMetadataPill(
+                        icon: "number",
+                        title: t("Chat ID", "チャットID"),
+                        value: codexContext.shortSessionID
+                    )
+                }
+            }
+        }
+    }
+
+    private func codexMetadataPill(icon: String, title: String, value: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.system(size: scaled(9), weight: .semibold))
+            Text("\(title): \(value)")
+                .font(.system(size: scaled(10.5), weight: .semibold))
+        }
+        .foregroundStyle(theme.primaryText)
+        .padding(.horizontal, scaled(8))
+        .padding(.vertical, scaled(4))
+        .background(theme.hintFill)
     }
 
     private var primaryHeaderRow: some View {
@@ -1574,6 +1632,10 @@ struct StandaloneNoteEditorView: View {
 
     private var editorBody: some View {
         VStack(alignment: .leading, spacing: 6) {
+            if commitMode == .orphanedCodex {
+                orphanedCodexBanner
+            }
+
             if isMarkdownPreviewVisible {
                 HStack {
                     Spacer(minLength: 0)
@@ -1596,13 +1658,16 @@ struct StandaloneNoteEditorView: View {
                     toggleMarkdownPreviewShortcut: appDelegate.settings.toggleMarkdownPreviewShortcut,
                     joinLinesShortcut: appDelegate.settings.joinLinesShortcut,
                     normalizeForCommandShortcut: appDelegate.settings.normalizeForCommandShortcut,
+                    orphanCodexDiscardShortcut: appDelegate.settings.orphanCodexDiscardShortcut,
                     onEscape: cancelAndClose,
                     onCommit: commitDraft,
+                    onDiscardOrphanCodex: onDiscardOrphanCodex,
                     onToggleMarkdownPreview: toggleMarkdownPreview,
                     onToggleHelp: {},
                     onZoomIn: { appDelegate.increaseInterfaceZoom() },
                     onZoomOut: { appDelegate.decreaseInterfaceZoom() },
-                    onResetZoom: { appDelegate.resetInterfaceZoom() }
+                    onResetZoom: { appDelegate.resetInterfaceZoom() },
+                    onSelectionChange: updateEditorSelectionLocation
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(
@@ -1621,13 +1686,68 @@ struct StandaloneNoteEditorView: View {
                         markdown: draftText,
                         width: scaled(Self.markdownPreviewSidebarWidth),
                         minHeight: scaled(180),
-                        fontScale: zoomScale
+                        fontScale: zoomScale,
+                        scrollProgress: markdownPreviewScrollProgress
                     )
                     .frame(maxHeight: .infinity, alignment: .top)
                 }
             }
         }
         .padding(scaled(12))
+    }
+
+    private var orphanedCodexBanner: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(t("Codex session disconnected", "Codex セッションの接続が切れました"))
+                    .font(.system(size: scaled(11), weight: .semibold))
+                    .foregroundStyle(.primary)
+                if let codexContext {
+                    Text("\(codexContext.projectDisplayName) • \(codexContext.shortSessionID)")
+                        .font(.system(size: scaled(10.5), weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+                Text(t(
+                    "You can keep editing, then copy to clipboard or discard this draft.",
+                    "編集は継続できます。内容をクリップボードへ保存するか、この下書きを削除してください。"
+                ))
+                .font(.system(size: scaled(10)))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 0)
+
+            Button {
+                commitDraft()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "doc.on.clipboard")
+                    Text(t("Copy", "保存"))
+                }
+                .font(.system(size: scaled(10.5), weight: .semibold))
+            }
+            .buttonStyle(.borderedProminent)
+
+            Button(role: .destructive) {
+                onDiscardOrphanCodex?()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "trash")
+                    Text(t("Delete", "削除"))
+                }
+                .font(.system(size: scaled(10.5), weight: .semibold))
+            }
+            .buttonStyle(.bordered)
+        }
+        .padding(.horizontal, scaled(10))
+        .padding(.vertical, scaled(8))
+        .background(theme.hintFill.opacity(0.92))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.white.opacity(0.12), lineWidth: 0.8)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     @ViewBuilder
@@ -1664,6 +1784,25 @@ struct StandaloneNoteEditorView: View {
                 primaryTextColor: theme.primaryText,
                 secondaryTextColor: theme.secondaryText
             )
+        case .orphanedCodex:
+            HStack(spacing: 10) {
+                ShortcutHintView(
+                    icon: "doc.on.clipboard",
+                    label: t("Copy to Clipboard", "クリップボードに保存"),
+                    key: "⌘↩",
+                    zoomScale: zoomScale,
+                    primaryTextColor: theme.primaryText,
+                    secondaryTextColor: theme.secondaryText
+                )
+                ShortcutHintView(
+                    icon: "trash",
+                    label: t("Delete", "削除"),
+                    key: HotKeyManager.displayString(for: appDelegate.settings.orphanCodexDiscardShortcut),
+                    zoomScale: zoomScale,
+                    primaryTextColor: theme.primaryText,
+                    secondaryTextColor: theme.secondaryText
+                )
+            }
         }
     }
 
@@ -1671,6 +1810,8 @@ struct StandaloneNoteEditorView: View {
         let text = initialText
         committedText = text
         draftText = text
+        editorSelectionLocation = 0
+        markdownPreviewScrollProgress = MarkdownPreviewScrollSync.progress(for: text, selectionLocation: 0)
         onDraftChange(text)
     }
 
@@ -1680,11 +1821,20 @@ struct StandaloneNoteEditorView: View {
     }
 
     private func cancelAndClose() {
+        guard commitMode != .orphanedCodex else { return }
         onClose()
     }
 
     private func toggleMarkdownPreview() {
         isMarkdownPreviewVisible.toggle()
+    }
+
+    private func updateEditorSelectionLocation(_ location: Int) {
+        editorSelectionLocation = location
+        markdownPreviewScrollProgress = MarkdownPreviewScrollSync.progress(
+            for: draftText,
+            selectionLocation: location
+        )
     }
 
     private func t(_ english: String, _ japanese: String) -> String {

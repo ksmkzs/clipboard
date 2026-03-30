@@ -8,6 +8,7 @@ struct ClipboardStorePaths {
     let noteDraftDirectory: URL
     let codexIntegrationDirectory: URL
     let codexCompletionDirectory: URL
+    let codexSessionStateDirectory: URL
     let codexRequestDirectory: URL
     let codexOpenRequestURL: URL
     let codexHelperScriptURL: URL
@@ -22,6 +23,7 @@ struct ClipboardStorePaths {
         let codexIntegrationDirectory = homeDirectory.appendingPathComponent(".clipboardhistory/bin", isDirectory: true)
         let codexRequestDirectory = storeDirectory.appendingPathComponent("Codex", isDirectory: true)
         let codexCompletionDirectory = codexRequestDirectory.appendingPathComponent("Sessions", isDirectory: true)
+        let codexSessionStateDirectory = codexRequestDirectory.appendingPathComponent("State", isDirectory: true)
         let codexOpenRequestURL = codexRequestDirectory.appendingPathComponent("open-request.txt")
         let codexHelperScriptURL = codexIntegrationDirectory.appendingPathComponent("clipboardhistory-codex-editor")
         return ClipboardStorePaths(
@@ -32,6 +34,7 @@ struct ClipboardStorePaths {
             noteDraftDirectory: noteDraftDirectory,
             codexIntegrationDirectory: codexIntegrationDirectory,
             codexCompletionDirectory: codexCompletionDirectory,
+            codexSessionStateDirectory: codexSessionStateDirectory,
             codexRequestDirectory: codexRequestDirectory,
             codexOpenRequestURL: codexOpenRequestURL,
             codexHelperScriptURL: codexHelperScriptURL
@@ -65,6 +68,10 @@ struct ClipboardStorePaths {
         )
         try fileManager.createDirectory(
             at: codexCompletionDirectory,
+            withIntermediateDirectories: true
+        )
+        try fileManager.createDirectory(
+            at: codexSessionStateDirectory,
             withIntermediateDirectories: true
         )
     }

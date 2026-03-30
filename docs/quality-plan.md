@@ -193,6 +193,35 @@ When a complex regression test fails, smaller suites should isolate the fault do
   - `enter_paste_smoke.sh`
   - `enter_paste_target_switch_smoke.sh`
 
+## 6.1 Markdown Preview Backlog
+
+The current Markdown preview is intentionally practical rather than a full GitHub-flavored Markdown clone.
+
+Implemented today:
+
+- headings
+- paragraphs
+- soft break and hard break handling
+- unordered and ordered lists
+- task-list checkboxes
+- blockquotes
+- fenced code blocks
+- inline code
+- links and images
+- bold / italic / strikethrough
+- approximate preview auto-scroll based on the current editor line
+
+Remaining gaps or non-guaranteed areas:
+
+- tables
+- nested list fidelity
+- ordered-list starting numbers
+- mixed raw HTML inside Markdown
+- quote / code edge cases
+- image sizing and layout fidelity
+- pixel-perfect editor-to-preview scroll sync
+- GitHub / Qiita-exact rendering parity
+
 ## 7. Execution Order
 
 1. Freeze the specification inventory above.

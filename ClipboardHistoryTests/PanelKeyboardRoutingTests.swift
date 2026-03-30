@@ -335,6 +335,7 @@ final class AppSettingsStoreTests: XCTestCase {
         XCTAssertEqual(loaded.globalNewNoteShortcut, AppSettings.defaultGlobalNewNoteShortcut)
         XCTAssertEqual(loaded.globalCopyJoinedShortcut, AppSettings.defaultGlobalCopyJoinedShortcut)
         XCTAssertEqual(loaded.globalCopyNormalizedShortcut, AppSettings.defaultGlobalCopyNormalizedShortcut)
+        XCTAssertEqual(loaded.orphanCodexDiscardShortcut, AppSettings.defaultOrphanCodexDiscardShortcut)
         XCTAssertTrue(loaded.globalCopyJoinedEnabled)
         XCTAssertTrue(loaded.globalCopyNormalizedEnabled)
 
@@ -374,6 +375,10 @@ final class AppSettingsStoreTests: XCTestCase {
         )
         settings.globalCopyJoinedEnabled = false
         settings.globalCopyNormalizedEnabled = false
+        settings.orphanCodexDiscardShortcut = HotKeyManager.Shortcut(
+            keyCode: UInt32(kVK_ANSI_Backslash),
+            modifiers: UInt32(cmdKey | shiftKey)
+        )
 
         store.save(settings)
         let loaded = store.load()
@@ -384,6 +389,7 @@ final class AppSettingsStoreTests: XCTestCase {
         XCTAssertEqual(loaded.globalNewNoteShortcut, settings.globalNewNoteShortcut)
         XCTAssertEqual(loaded.globalCopyJoinedShortcut, settings.globalCopyJoinedShortcut)
         XCTAssertEqual(loaded.globalCopyNormalizedShortcut, settings.globalCopyNormalizedShortcut)
+        XCTAssertEqual(loaded.orphanCodexDiscardShortcut, settings.orphanCodexDiscardShortcut)
         XCTAssertFalse(loaded.globalCopyJoinedEnabled)
         XCTAssertFalse(loaded.globalCopyNormalizedEnabled)
 
@@ -402,9 +408,10 @@ final class AppSettingsStoreTests: XCTestCase {
         XCTAssertEqual(loaded.globalNewNoteShortcut, AppSettings.defaultGlobalNewNoteShortcut)
         XCTAssertEqual(loaded.globalCopyJoinedShortcut, AppSettings.defaultGlobalCopyJoinedShortcut)
         XCTAssertEqual(loaded.globalCopyNormalizedShortcut, AppSettings.defaultGlobalCopyNormalizedShortcut)
+        XCTAssertEqual(loaded.orphanCodexDiscardShortcut, AppSettings.defaultOrphanCodexDiscardShortcut)
         XCTAssertTrue(loaded.globalCopyJoinedEnabled)
         XCTAssertTrue(loaded.globalCopyNormalizedEnabled)
-        XCTAssertEqual(defaults.integer(forKey: "app.settings.migrationVersion"), 8)
+        XCTAssertEqual(defaults.integer(forKey: "app.settings.migrationVersion"), 9)
 
         defaults.removePersistentDomain(forName: suiteName)
     }
