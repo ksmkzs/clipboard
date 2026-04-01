@@ -320,11 +320,6 @@ struct EditorTextView: NSViewRepresentable {
         if textView.frame.width != nsView.contentSize.width {
             textView.frame = NSRect(origin: .zero, size: nsView.contentSize)
         }
-        DispatchQueue.main.async {
-            if nsView.window?.firstResponder !== textView {
-                nsView.window?.makeFirstResponder(textView)
-            }
-        }
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -386,6 +381,7 @@ struct MarkdownPreviewSidebar: View {
     let minHeight: CGFloat
     let fontScale: CGFloat
     let scrollProgress: CGFloat?
+    let scrollRequestID: Int
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -396,7 +392,12 @@ struct MarkdownPreviewSidebar: View {
                     .padding(.horizontal, 2)
             }
 
-            MarkdownWebPreview(markdown: markdown, fontScale: fontScale, scrollProgress: scrollProgress)
+            MarkdownWebPreview(
+                markdown: markdown,
+                fontScale: fontScale,
+                scrollProgress: scrollProgress,
+                scrollRequestID: scrollRequestID
+            )
                 .frame(width: width)
                 .frame(minHeight: minHeight, alignment: .topLeading)
                 .background(
@@ -415,6 +416,7 @@ struct MarkdownWebPreview: NSViewRepresentable {
     let markdown: String
     let fontScale: CGFloat
     let scrollProgress: CGFloat?
+    let scrollRequestID: Int
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -422,7 +424,7 @@ struct MarkdownWebPreview: NSViewRepresentable {
 
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
-        let webView = WKWebView(frame: .zero, configuration: configuration)
+        let webView = SelectableMarkdownWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
         webView.setValue(false, forKey: "drawsBackground")
         webView.allowsMagnification = false
@@ -439,21 +441,18 @@ struct MarkdownWebPreview: NSViewRepresentable {
 
     private func load(_ markdown: String, scrollProgress: CGFloat?, into webView: WKWebView, coordinator: Coordinator) {
         let html = MarkdownPreviewRenderer.documentHTML(for: markdown, fontScale: fontScale)
-        let clampedScrollProgress = scrollProgress.map { min(1, max(0, $0)) }
-        coordinator.pendingScrollProgress = clampedScrollProgress
         if coordinator.lastHTML != html {
             coordinator.lastHTML = html
-            coordinator.appliedScrollProgress = nil
+            coordinator.preservedScrollProgress = coordinator.appliedScrollProgress
             webView.loadHTMLString(html, baseURL: nil)
             return
         }
-        coordinator.applyScrollProgress(clampedScrollProgress, to: webView)
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate {
         var lastHTML = ""
-        var pendingScrollProgress: CGFloat?
         var appliedScrollProgress: CGFloat?
+        var preservedScrollProgress: CGFloat?
 
         func webView(
             _ webView: WKWebView,
@@ -478,7 +477,10 @@ struct MarkdownWebPreview: NSViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            applyScrollProgress(pendingScrollProgress, to: webView, force: true)
+            if let preservedScrollProgress {
+                applyScrollProgress(preservedScrollProgress, to: webView, force: true)
+                self.preservedScrollProgress = nil
+            }
         }
 
         func applyScrollProgress(_ progress: CGFloat?, to webView: WKWebView, force: Bool = false) {
@@ -495,6 +497,34 @@ struct MarkdownWebPreview: NSViewRepresentable {
             """
             webView.evaluateJavaScript(script, completionHandler: nil)
             appliedScrollProgress = clamped
+        }
+
+    }
+}
+
+final class SelectableMarkdownWebView: WKWebView {
+    override var acceptsFirstResponder: Bool {
+        true
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard modifiers.contains(.command),
+              !modifiers.contains(.option),
+              !modifiers.contains(.control),
+              let key = event.charactersIgnoringModifiers?.lowercased() else {
+            return super.performKeyEquivalent(with: event)
+        }
+
+        switch key {
+        case "c":
+            NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: self)
+            return true
+        case "a":
+            NSApp.sendAction(#selector(NSResponder.selectAll(_:)), to: nil, from: self)
+            return true
+        default:
+            return super.performKeyEquivalent(with: event)
         }
     }
 }
@@ -521,8 +551,8 @@ enum MarkdownPreviewRenderer {
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
         :root { color-scheme: dark; }
-        html, body { margin: 0; padding: 0; background: transparent; color: rgba(255,255,255,0.92); font-family: -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif; font-size: \(String(format: "%.2f", baseFontSize))px; line-height: 1.55; }
-        body { padding: 10px 12px 12px; }
+        html, body { margin: 0; padding: 0; background: transparent; color: rgba(255,255,255,0.92); font-family: -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif; font-size: \(String(format: "%.2f", baseFontSize))px; line-height: 1.55; -webkit-user-select: text; user-select: text; }
+        body { padding: 10px 12px 12px; cursor: text; }
         h1,h2,h3,h4,h5,h6 { margin: 0 0 10px; line-height: 1.25; font-weight: 700; color: rgba(255,255,255,0.96); }
         h1 { font-size: 1.8em; }
         h2 { font-size: 1.45em; }

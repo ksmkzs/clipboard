@@ -25,6 +25,11 @@ enum HotKeyRegistrationState: Equatable {
     }
 }
 
+enum EditorSaveDestination: Equatable {
+    case clipboard
+    case file
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWindowDelegate {
     typealias CodexIntegrationStatus = ClipboardCodexIntegrationStatus
 
@@ -167,6 +172,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     @Published private(set) var settings = AppSettings.default
     @Published private(set) var panelHotKeyState: HotKeyRegistrationState = .notRegistered
     @Published private(set) var translationHotKeyState: HotKeyRegistrationState = .notRegistered
+    @Published private(set) var noteEditorLastSaveDestination: EditorSaveDestination?
+    @Published private(set) var noteEditorSaveRevision: Int = 0
     
     private var panelHotKeyShortcut = AppSettings.default.panelShortcut
     private var translateHotKeyShortcut = AppSettings.default.translationShortcut
@@ -2654,6 +2661,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         isCurrentEditorFileBacked && noteEditorDraftText != noteEditorLastPersistedText
     }
 
+    var currentNoteEditorLastPersistedText: String {
+        noteEditorLastPersistedText
+    }
+
     private func inferredFileBackedDocumentKind(for fileURL: URL, preferredKind: FileBackedDocumentKind? = nil) -> FileBackedDocumentKind {
         if let preferredKind {
             return preferredKind
@@ -2862,7 +2873,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
 
             switch response {
             case .alertFirstButtonReturn:
-                _ = self.copyTextToClipboard(self.noteEditorDraftText, feedbackMessage: "Copied")
+                if self.copyTextToClipboard(self.noteEditorDraftText, feedbackMessage: "Copied") {
+                    self.markCurrentNoteEditorSaved(text: self.noteEditorDraftText, destination: .clipboard)
+                }
             case .alertSecondButtonReturn:
                 _ = self.saveCurrentEditorTextToFile(forceSaveAs: forceSaveAs)
             default:
@@ -2876,7 +2889,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         if let fileURL = noteEditorExternalFileURL, !forceSaveAs {
             let didSave = saveExternalEditorText(noteEditorDraftText, to: fileURL)
             if didSave {
-                noteEditorLastPersistedText = noteEditorDraftText
+                markCurrentNoteEditorSaved(text: noteEditorDraftText, destination: .file)
                 noteEditorObservedFileModificationDate = fileModificationDate(for: fileURL)
                 noteEditorObservedFileContentSnapshot = noteEditorDraftText
             }
@@ -2894,7 +2907,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         let didSave = saveExternalEditorText(noteEditorDraftText, to: destinationURL)
         if didSave {
             noteEditorExternalFileURL = destinationURL.standardizedFileURL
-            noteEditorLastPersistedText = noteEditorDraftText
+            markCurrentNoteEditorSaved(text: noteEditorDraftText, destination: .file)
             noteEditorObservedFileModificationDate = fileModificationDate(for: destinationURL)
             noteEditorObservedFileContentSnapshot = noteEditorDraftText
             noteEditorWindowController?.window?.representedURL = destinationURL
@@ -2908,24 +2921,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         return didSave
     }
 
-    private func saveStandaloneEditor() {
+    @discardableResult
+    private func saveStandaloneEditor() -> EditorSaveDestination? {
         if isCurrentEditorFileBacked {
             if noteEditorExternalFileURL != nil {
-                _ = saveCurrentEditorTextToFile()
+                return saveCurrentEditorTextToFile() ? .file : nil
             } else {
-                _ = copyTextToClipboard(noteEditorDraftText, feedbackMessage: "Copied")
+                guard copyTextToClipboard(noteEditorDraftText, feedbackMessage: "Copied") else {
+                    return nil
+                }
+                markCurrentNoteEditorSaved(text: noteEditorDraftText, destination: .clipboard)
+                return .clipboard
             }
-            return
         }
-        _ = copyTextToClipboard(noteEditorDraftText, feedbackMessage: "Copied")
+        guard copyTextToClipboard(noteEditorDraftText, feedbackMessage: "Copied") else {
+            return nil
+        }
+        markCurrentNoteEditorSaved(text: noteEditorDraftText, destination: .clipboard)
+        return .clipboard
     }
 
-    private func saveStandaloneEditorAs() {
+    @discardableResult
+    private func saveStandaloneEditorAs() -> EditorSaveDestination? {
         if isCurrentEditorFileBacked {
             promptFileBackedSaveDestination(forceSaveAs: true)
-            return
+            return nil
         }
-        _ = copyTextToClipboard(noteEditorDraftText, feedbackMessage: "Copied")
+        guard copyTextToClipboard(noteEditorDraftText, feedbackMessage: "Copied") else {
+            return nil
+        }
+        markCurrentNoteEditorSaved(text: noteEditorDraftText, destination: .clipboard)
+        return .clipboard
     }
 
     private func defaultSavePanelFileName() -> String {
@@ -3313,6 +3339,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             ?? ""
         noteEditorDraftText = initialText
         noteEditorLastPersistedText = initialText
+        noteEditorLastSaveDestination = nil
         _ = dataManager.saveWorkingNoteText(initialText, for: itemID)
 
         let rootView = StandaloneNoteEditorView(
@@ -3373,6 +3400,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         let resolvedInitialText = initialText ?? ((try? String(contentsOf: fileURL, encoding: .utf8)) ?? "")
         noteEditorDraftText = resolvedInitialText
         noteEditorLastPersistedText = resolvedInitialText
+        noteEditorLastSaveDestination = nil
 
         let rootView = StandaloneNoteEditorView(
             initialText: resolvedInitialText,
@@ -3438,6 +3466,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         noteEditorCodexProjectRootURL = nil
         noteEditorDraftText = initialText
         noteEditorLastPersistedText = initialText
+        noteEditorLastSaveDestination = fileURL == nil ? nil : .file
         noteEditorObservedFileModificationDate = fileURL.flatMap(fileModificationDate(for:))
         noteEditorObservedFileContentSnapshot = initialText
 
@@ -3575,6 +3604,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         noteEditorCodexProjectRootURL = nil
         noteEditorDraftText = ""
         noteEditorLastPersistedText = ""
+        noteEditorLastSaveDestination = nil
+        noteEditorSaveRevision += 1
         noteEditorWindowController = nil
 
         window.contentViewController = NSViewController()
@@ -3883,6 +3914,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     private func reloadFileBackedEditorFromDisk(text: String, fileURL: URL) {
         noteEditorDraftText = text
         noteEditorLastPersistedText = text
+        noteEditorLastSaveDestination = .file
+        noteEditorSaveRevision += 1
         noteEditorObservedFileContentSnapshot = text
         noteEditorObservedFileModificationDate = fileModificationDate(for: fileURL)
         noteEditorWindowController?.window?.title = externalEditorWindowTitle(
@@ -3920,6 +3953,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
                 )
             )
         }
+    }
+
+    private func markCurrentNoteEditorSaved(text: String, destination: EditorSaveDestination) {
+        noteEditorLastPersistedText = text
+        noteEditorLastSaveDestination = destination
+        noteEditorSaveRevision += 1
     }
 
     enum ExternalEditorCloseOutcome: Equatable {

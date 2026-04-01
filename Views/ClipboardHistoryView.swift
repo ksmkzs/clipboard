@@ -1435,7 +1435,7 @@ struct ClipboardHelpPanelContent: View {
                 .frame(minWidth: 120, alignment: .leading)
             Text("→")
                 .foregroundStyle(.secondary)
-            MarkdownWebPreview(markdown: source, fontScale: 0.84, scrollProgress: nil)
+            MarkdownWebPreview(markdown: source, fontScale: 0.84, scrollProgress: nil, scrollRequestID: 0)
                 .frame(width: 178)
                 .frame(height: markdownExamplePreviewHeight(for: source), alignment: .topLeading)
                 .background(
@@ -1492,8 +1492,6 @@ struct StandaloneNoteEditorView: View {
     @State private var draftText = ""
     @State private var committedText = ""
     @State private var isMarkdownPreviewVisible = false
-    @State private var editorSelectionLocation = 0
-    @State private var markdownPreviewScrollProgress: CGFloat = 0
     @State private var markdownPreviewWidth: CGFloat = 0
 
     private var zoomScale: CGFloat {
@@ -1514,6 +1512,53 @@ struct StandaloneNoteEditorView: View {
 
     private var supportsMarkdownPreview: Bool {
         commitMode != .fileBackedText
+    }
+
+    private var isDirty: Bool {
+        _ = appDelegate.noteEditorSaveRevision
+        return draftText != appDelegate.currentNoteEditorLastPersistedText
+    }
+
+    private var saveStatusText: String {
+        if isDirty {
+            return t("Unsaved", "未保存")
+        }
+        switch appDelegate.noteEditorLastSaveDestination {
+        case .clipboard:
+            return t("Saved to Clipboard", "クリップボード保存済み")
+        case .file:
+            return t("Saved", "保存済み")
+        case .none:
+            return t("Unsaved", "未保存")
+        }
+    }
+
+    private var saveStatusIcon: String {
+        if isDirty {
+            return "circle.fill"
+        }
+        switch appDelegate.noteEditorLastSaveDestination {
+        case .clipboard:
+            return "doc.on.clipboard"
+        case .file:
+            return "checkmark.circle.fill"
+        case .none:
+            return "circle.fill"
+        }
+    }
+
+    private var saveStatusColor: Color {
+        if isDirty {
+            return .orange
+        }
+        switch appDelegate.noteEditorLastSaveDestination {
+        case .clipboard:
+            return Color(red: 0.77, green: 0.60, blue: 0.14)
+        case .file:
+            return Color(red: 0.22, green: 0.67, blue: 0.34)
+        case .none:
+            return .orange
+        }
     }
 
     private var resolvedMarkdownPreviewWidth: CGFloat {
@@ -1563,10 +1608,6 @@ struct StandaloneNoteEditorView: View {
         }
         .onChange(of: draftText) { _, newValue in
             onDraftChange(newValue)
-            markdownPreviewScrollProgress = MarkdownPreviewScrollSync.progress(
-                for: newValue,
-                selectionLocation: editorSelectionLocation
-            )
         }
     }
 
@@ -1674,6 +1715,17 @@ struct StandaloneNoteEditorView: View {
                     secondaryTextColor: theme.secondaryText
                 )
             }
+            Spacer(minLength: 0)
+            HStack(spacing: 6) {
+                Image(systemName: saveStatusIcon)
+                    .font(.system(size: scaled(9), weight: .semibold))
+                Text(saveStatusText)
+                    .font(.system(size: scaled(10.5), weight: .semibold))
+            }
+            .foregroundStyle(saveStatusColor)
+            .padding(.horizontal, scaled(8))
+            .padding(.vertical, scaled(4))
+            .background(theme.hintFill)
         }
     }
 
@@ -1771,7 +1823,7 @@ struct StandaloneNoteEditorView: View {
                     onZoomIn: { appDelegate.increaseInterfaceZoom() },
                     onZoomOut: { appDelegate.decreaseInterfaceZoom() },
                     onResetZoom: { appDelegate.resetInterfaceZoom() },
-                    onSelectionChange: updateEditorSelectionLocation
+                    onSelectionChange: { _ in }
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(
@@ -1798,7 +1850,8 @@ struct StandaloneNoteEditorView: View {
                         width: resolvedMarkdownPreviewWidth,
                         minHeight: scaled(180),
                         fontScale: zoomScale,
-                        scrollProgress: markdownPreviewScrollProgress
+                        scrollProgress: nil,
+                        scrollRequestID: 0
                     )
                     .frame(maxHeight: .infinity, alignment: .top)
                 }
@@ -1923,8 +1976,6 @@ struct StandaloneNoteEditorView: View {
         let text = initialText
         committedText = text
         draftText = text
-        editorSelectionLocation = 0
-        markdownPreviewScrollProgress = MarkdownPreviewScrollSync.progress(for: text, selectionLocation: 0)
         onDraftChange(text)
     }
 
@@ -1941,14 +1992,6 @@ struct StandaloneNoteEditorView: View {
     private func toggleMarkdownPreview() {
         guard supportsMarkdownPreview else { return }
         isMarkdownPreviewVisible.toggle()
-    }
-
-    private func updateEditorSelectionLocation(_ location: Int) {
-        editorSelectionLocation = location
-        markdownPreviewScrollProgress = MarkdownPreviewScrollSync.progress(
-            for: draftText,
-            selectionLocation: location
-        )
     }
 
     private func t(_ english: String, _ japanese: String) -> String {

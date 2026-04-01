@@ -56,7 +56,6 @@ struct HistoryRowView: View {
     let onTogglePinned: () -> Void
     let onDelete: () -> Void
     @State private var pinLabelDraft = ""
-    @State private var editorSelectionLocation = 0
     @State private var markdownPreviewWidth: CGFloat = 0
 
     private var zoomScale: CGFloat {
@@ -387,7 +386,7 @@ struct HistoryRowView: View {
             onZoomIn: onZoomIn,
             onZoomOut: onZoomOut,
             onResetZoom: onResetZoom,
-            onSelectionChange: { editorSelectionLocation = $0 }
+            onSelectionChange: { _ in }
         )
         .frame(maxWidth: .infinity, minHeight: scaled(isCompact ? 108 : 140), alignment: .topLeading)
         .background(
@@ -407,10 +406,8 @@ struct HistoryRowView: View {
             width: markdownPreviewSidebarWidth,
             minHeight: scaled(isCompact ? 108 : 140),
             fontScale: zoomScale,
-            scrollProgress: MarkdownPreviewScrollSync.progress(
-                for: editorText,
-                selectionLocation: editorSelectionLocation
-            )
+            scrollProgress: nil,
+            scrollRequestID: 0
         )
     }
 
