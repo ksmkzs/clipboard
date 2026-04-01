@@ -2585,6 +2585,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             return
         }
 
+        let targetApp = currentPlacementTargetApp()
+        previouslyActiveApp = targetApp
+        placementTargetApp = targetApp
+
         if let currentURL = noteEditorExternalFileURL,
            currentURL == standardizedURL,
            let window = noteEditorWindowController?.window,
@@ -3003,10 +3007,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         DispatchQueue.main.async { [weak self] in
             if let externalFileURL {
                 self?.stopCodexSessionStateMonitor()
-                switch Self.externalEditorCloseOutcome(
+                let closeOutcome = Self.externalEditorCloseOutcome(
                     commitRequested: shouldCommitExternalDraft,
                     isOrphaned: isOrphanedCodexDraft
-                ) {
+                )
+                switch closeOutcome {
                 case .persistAndSignal:
                     _ = self?.saveExternalEditorText(finalText, to: externalFileURL)
                     if let completionMarkerURL {
@@ -3026,6 +3031,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
                     try? FileManager.default.removeItem(at: sessionStateURL)
                 }
                 self?.restoreAccessoryActivationPolicyIfNeeded()
+                if closeOutcome == .persistAndSignal {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                        self?.reactivatePreviouslyActiveApp()
+                    }
+                }
             } else {
                 self?.persistClosedNoteEditorDraft(itemID: itemID, finalText: finalText, copyToClipboard: copyToClipboard)
             }
