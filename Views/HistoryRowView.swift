@@ -57,6 +57,7 @@ struct HistoryRowView: View {
     let onDelete: () -> Void
     @State private var pinLabelDraft = ""
     @State private var editorSelectionLocation = 0
+    @State private var markdownPreviewWidth: CGFloat = 0
 
     private var zoomScale: CGFloat {
         max(0.8, min(interfaceZoomScale, 1.8))
@@ -67,7 +68,9 @@ struct HistoryRowView: View {
     }
 
     private var markdownPreviewSidebarWidth: CGFloat {
-        scaled(228)
+        let fallback = scaled(228)
+        let currentWidth = markdownPreviewWidth > 0 ? markdownPreviewWidth : fallback
+        return min(max(currentWidth, scaled(160)), scaled(420))
     }
     
     var body: some View {
@@ -175,6 +178,9 @@ struct HistoryRowView: View {
         .onTapGesture(perform: onSelect)
         .onAppear {
             syncPinLabelDraft()
+            if markdownPreviewWidth == 0 {
+                markdownPreviewWidth = scaled(228)
+            }
         }
         .onChange(of: pinLabel) { _, _ in
             syncPinLabelDraft()
@@ -346,6 +352,12 @@ struct HistoryRowView: View {
             HStack(alignment: .top, spacing: 8) {
                 editorTextPane
                 if isMarkdownPreviewVisible {
+                    MarkdownPreviewResizeHandle { delta in
+                        markdownPreviewWidth = min(
+                            max(markdownPreviewSidebarWidth - delta, scaled(160)),
+                            scaled(420)
+                        )
+                    }
                     markdownPreviewPane
                 }
             }
@@ -367,6 +379,8 @@ struct HistoryRowView: View {
             orphanCodexDiscardShortcut: AppSettings.defaultOrphanCodexDiscardShortcut,
             onEscape: onCancelEditor,
             onCommit: onCommitEditor,
+            onSave: {},
+            onSaveAs: {},
             onDiscardOrphanCodex: nil,
             onToggleMarkdownPreview: onToggleMarkdownPreview,
             onToggleHelp: onToggleHelp,

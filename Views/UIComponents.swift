@@ -211,6 +211,8 @@ struct EditorTextView: NSViewRepresentable {
     let orphanCodexDiscardShortcut: HotKeyManager.Shortcut
     let onEscape: () -> Void
     let onCommit: () -> Void
+    let onSave: () -> Void
+    let onSaveAs: () -> Void
     let onDiscardOrphanCodex: (() -> Void)?
     let onToggleMarkdownPreview: () -> Void
     let onToggleHelp: () -> Void
@@ -267,6 +269,8 @@ struct EditorTextView: NSViewRepresentable {
         textView.orphanCodexDiscardShortcut = orphanCodexDiscardShortcut
         textView.onEscape = onEscape
         textView.onCommit = onCommit
+        textView.onSave = onSave
+        textView.onSaveAs = onSaveAs
         textView.onDiscardOrphanCodex = onDiscardOrphanCodex
         textView.onToggleMarkdownPreview = onToggleMarkdownPreview
         textView.onToggleHelp = onToggleHelp
@@ -300,6 +304,8 @@ struct EditorTextView: NSViewRepresentable {
         textView.orphanCodexDiscardShortcut = orphanCodexDiscardShortcut
         textView.onEscape = onEscape
         textView.onCommit = onCommit
+        textView.onSave = onSave
+        textView.onSaveAs = onSaveAs
         textView.onDiscardOrphanCodex = onDiscardOrphanCodex
         textView.onToggleMarkdownPreview = onToggleMarkdownPreview
         textView.onToggleHelp = onToggleHelp
@@ -456,7 +462,15 @@ struct MarkdownWebPreview: NSViewRepresentable {
         ) {
             if navigationAction.navigationType == .linkActivated,
                let url = navigationAction.request.url {
-                NSWorkspace.shared.open(url)
+                let alert = NSAlert()
+                alert.messageText = "Open link?"
+                alert.informativeText = url.absoluteString
+                alert.alertStyle = .informational
+                alert.addButton(withTitle: "Open")
+                alert.addButton(withTitle: "Cancel")
+                if alert.runModal() == .alertFirstButtonReturn {
+                    NSWorkspace.shared.open(url)
+                }
                 decisionHandler(.cancel)
                 return
             }
@@ -752,7 +766,11 @@ enum MarkdownPreviewRenderer {
         }
 
         var html = escapeHTML(withPlaceholders)
-        html = replace(html, pattern: #"!\[([^\]]*)\]\(([^)\s]+)\)"#, template: #"<img alt="$1" src="$2">"#)
+        html = replace(
+            html,
+            pattern: #"!\[([^\]]*)\]\(([^)\s]+)\)"#,
+            template: #"<span class="muted">[Image unsupported]</span>"#
+        )
         html = replace(html, pattern: #"\[([^\]]+)\]\(([^)\s]+)\)"#, template: #"<a href="$2">$1</a>"#)
         html = replace(html, pattern: #"\*\*([^*]+)\*\*"#, template: #"<strong>$1</strong>"#)
         html = replace(html, pattern: #"__([^_]+)__"#, template: #"<strong>$1</strong>"#)
@@ -801,6 +819,8 @@ final class EditorNSTextView: NSTextView {
 
     var onEscape: (() -> Void)?
     var onCommit: (() -> Void)?
+    var onSave: (() -> Void)?
+    var onSaveAs: (() -> Void)?
     var onDiscardOrphanCodex: (() -> Void)?
     var onToggleMarkdownPreview: (() -> Void)?
     var onToggleHelp: (() -> Void)?
@@ -940,6 +960,12 @@ final class EditorNSTextView: NSTextView {
                 undoManager.undo()
                 return true
             }
+        } else if key == "s", modifiers.contains(.shift), !modifiers.contains(.option), !modifiers.contains(.control) {
+            onSaveAs?()
+            return true
+        } else if key == "s", !modifiers.contains(.shift), !modifiers.contains(.option), !modifiers.contains(.control) {
+            onSave?()
+            return true
         } else if HotKeyManager.event(event, matches: toggleMarkdownPreviewShortcut) {
             applyEditorCommand(.toggleMarkdownPreview)
             return true

@@ -1266,8 +1266,8 @@ enum ClipboardHelpCatalog {
             .init(title: t("Pin selected item", "選択中の項目をピン留め", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.togglePinShortcut), symbolName: "star.circle"),
             .init(title: t("Delete selected item", "選択中の項目を削除", language: settings.settingsLanguage), shortcut: "⌫", symbolName: "delete.left.circle"),
             .init(title: t("Show or hide pinned items", "ピン留めした項目の表示 / 非表示", language: settings.settingsLanguage), shortcut: "Tab", symbolName: "sidebar.right"),
-            .init(title: t("Normalize whitespace on selected item", "選択中の項目の空白を整形", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.copyNormalizedShortcut), symbolName: "terminal"),
-            .init(title: t("Join selected item into one sentence", "選択中の項目を一文に整形", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.copyJoinedShortcut), symbolName: "link.circle")
+            .init(title: t("Normalize the focused item", "フォーカス中の項目を整形", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.copyNormalizedShortcut), symbolName: "terminal"),
+            .init(title: t("Turn the focused item into one line", "フォーカス中の項目を一文化", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.copyJoinedShortcut), symbolName: "link.circle")
         ]
         return commands
     }
@@ -1289,9 +1289,22 @@ enum ClipboardHelpCatalog {
 
     static func copyCommands(settings: AppSettings) -> [ClipboardHelpCommandDescriptor] {
         [
-            .init(title: t("Replace clipboard with normalized text", "クリップボード内容を整形して上書き", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.copyNormalizedShortcut), symbolName: "terminal"),
-            .init(title: t("Replace clipboard with one-line text", "クリップボード内容を一文化して上書き", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.copyJoinedShortcut), symbolName: "link.circle")
+            .init(
+                title: t("Replace clipboard with normalized text", "クリップボード内容を整形して上書き", language: settings.settingsLanguage),
+                shortcut: displayString(for: settings.globalCopyNormalizedShortcut, enabled: settings.globalCopyNormalizedEnabled, language: settings.settingsLanguage),
+                symbolName: "terminal"
+            ),
+            .init(
+                title: t("Replace clipboard with one-line text", "クリップボード内容を一文化して上書き", language: settings.settingsLanguage),
+                shortcut: displayString(for: settings.globalCopyJoinedShortcut, enabled: settings.globalCopyJoinedEnabled, language: settings.settingsLanguage),
+                symbolName: "link.circle"
+            )
         ]
+    }
+
+    private static func displayString(for shortcut: HotKeyManager.Shortcut?, enabled: Bool, language: SettingsLanguage) -> String {
+        guard enabled, let shortcut else { return t("Off", "オフ", language: language) }
+        return HotKeyManager.displayString(for: shortcut)
     }
 
     private static func t(_ english: String, _ japanese: String, language: SettingsLanguage) -> String {
@@ -1329,7 +1342,7 @@ struct ClipboardHelpPanelContent: View {
                 VStack(alignment: .leading, spacing: 14) {
                     helpSection(title: t("Standard Window", "標準ウィンドウ"), commands: panelCommands)
                     helpSection(title: t("Editor Window", "編集ウィンドウ"), commands: editorCommands)
-                    helpSection(title: t("Copy Commands", "コピー系コマンド"), commands: copyCommands)
+                    helpSection(title: t("Global Clipboard Commands", "グローバルのクリップボード操作"), commands: copyCommands)
                     markdownSyntaxSection
                 }
             }
@@ -1456,16 +1469,23 @@ struct StandaloneNoteEditorView: View {
         case pasteToTarget
         case returnToCodex
         case orphanedCodex
+        case fileBackedMarkdown
+        case fileBackedText
     }
 
     private static let markdownPreviewSidebarWidth: CGFloat = 260
+    private static let markdownPreviewSidebarMinWidth: CGFloat = 180
+    private static let markdownPreviewSidebarMaxWidth: CGFloat = 520
 
     let initialText: String
     @ObservedObject var appDelegate: AppDelegate
     let codexContext: AppDelegate.CodexDraftContext?
     let commitMode: CommitMode
+    let initialMarkdownPreviewVisible: Bool
     let onDraftChange: (String) -> Void
     let onCommit: (String) -> Void
+    let onSave: () -> Void
+    let onSaveAs: () -> Void
     let onClose: () -> Void
     let onDiscardOrphanCodex: (() -> Void)?
 
@@ -1474,6 +1494,7 @@ struct StandaloneNoteEditorView: View {
     @State private var isMarkdownPreviewVisible = false
     @State private var editorSelectionLocation = 0
     @State private var markdownPreviewScrollProgress: CGFloat = 0
+    @State private var markdownPreviewWidth: CGFloat = 0
 
     private var zoomScale: CGFloat {
         CGFloat(appDelegate.settings.clampedInterfaceZoomScale)
@@ -1489,6 +1510,19 @@ struct StandaloneNoteEditorView: View {
 
     private var pasteTargetName: String {
         appDelegate.currentPasteTargetAppName() ?? t("previous app", "前のアプリ")
+    }
+
+    private var supportsMarkdownPreview: Bool {
+        commitMode != .fileBackedText
+    }
+
+    private var resolvedMarkdownPreviewWidth: CGFloat {
+        let fallback = scaled(Self.markdownPreviewSidebarWidth)
+        let currentWidth = markdownPreviewWidth > 0 ? markdownPreviewWidth : fallback
+        return min(
+            max(currentWidth, scaled(Self.markdownPreviewSidebarMinWidth)),
+            scaled(Self.markdownPreviewSidebarMaxWidth)
+        )
     }
 
     var body: some View {
@@ -1520,7 +1554,13 @@ struct StandaloneNoteEditorView: View {
                 .allowsHitTesting(false)
         }
         .animation(nil, value: appDelegate.settings.interfaceThemePreset.rawValue)
-        .onAppear(perform: loadCurrentText)
+        .onAppear {
+            loadCurrentText()
+            isMarkdownPreviewVisible = initialMarkdownPreviewVisible
+            if markdownPreviewWidth == 0 {
+                markdownPreviewWidth = scaled(Self.markdownPreviewSidebarWidth)
+            }
+        }
         .onChange(of: draftText) { _, newValue in
             onDraftChange(newValue)
             markdownPreviewScrollProgress = MarkdownPreviewScrollSync.progress(
@@ -1616,6 +1656,24 @@ struct StandaloneNoteEditorView: View {
                 secondaryTextColor: theme.secondaryText
             )
             standaloneCommitHint
+            if commitMode == .fileBackedMarkdown || commitMode == .fileBackedText {
+                ShortcutHintView(
+                    icon: "square.and.arrow.down",
+                    label: t("Save", "保存"),
+                    key: "⌘S",
+                    zoomScale: zoomScale,
+                    primaryTextColor: theme.primaryText,
+                    secondaryTextColor: theme.secondaryText
+                )
+                ShortcutHintView(
+                    icon: "square.and.arrow.down.on.square",
+                    label: t("Save As", "別名で保存"),
+                    key: "⌘⇧S",
+                    zoomScale: zoomScale,
+                    primaryTextColor: theme.primaryText,
+                    secondaryTextColor: theme.secondaryText
+                )
+            }
         }
     }
 
@@ -1645,14 +1703,16 @@ struct StandaloneNoteEditorView: View {
                 primaryTextColor: theme.primaryText,
                 secondaryTextColor: theme.secondaryText
             )
-            ShortcutHintView(
-                icon: "doc.richtext",
-                label: t("Markdown Preview", "Markdown プレビュー"),
-                key: HotKeyManager.displayString(for: appDelegate.settings.toggleMarkdownPreviewShortcut),
-                zoomScale: zoomScale,
-                primaryTextColor: theme.primaryText,
-                secondaryTextColor: theme.secondaryText
-            )
+            if supportsMarkdownPreview {
+                ShortcutHintView(
+                    icon: "doc.richtext",
+                    label: t("Markdown Preview", "Markdown プレビュー"),
+                    key: HotKeyManager.displayString(for: appDelegate.settings.toggleMarkdownPreviewShortcut),
+                    zoomScale: zoomScale,
+                    primaryTextColor: theme.primaryText,
+                    secondaryTextColor: theme.secondaryText
+                )
+            }
             ShortcutHintView(
                 icon: "terminal",
                 label: t("Normalize", "整形"),
@@ -1678,13 +1738,13 @@ struct StandaloneNoteEditorView: View {
                 orphanedCodexBanner
             }
 
-            if isMarkdownPreviewVisible {
+            if isMarkdownPreviewVisible && supportsMarkdownPreview {
                 HStack {
                     Spacer(minLength: 0)
                     Text(t("Markdown Preview", "Markdown プレビュー"))
                         .font(.system(size: scaled(11), weight: .semibold))
                         .foregroundStyle(.primary)
-                        .frame(width: scaled(Self.markdownPreviewSidebarWidth), alignment: .leading)
+                        .frame(width: resolvedMarkdownPreviewWidth, alignment: .leading)
                 }
             }
 
@@ -1703,6 +1763,8 @@ struct StandaloneNoteEditorView: View {
                     orphanCodexDiscardShortcut: appDelegate.settings.orphanCodexDiscardShortcut,
                     onEscape: cancelAndClose,
                     onCommit: commitDraft,
+                    onSave: onSave,
+                    onSaveAs: onSaveAs,
                     onDiscardOrphanCodex: onDiscardOrphanCodex,
                     onToggleMarkdownPreview: toggleMarkdownPreview,
                     onToggleHelp: {},
@@ -1722,11 +1784,18 @@ struct StandaloneNoteEditorView: View {
                         .stroke(Color.white.opacity(0.22), lineWidth: 0.8)
                 )
 
-                if isMarkdownPreviewVisible {
+                if isMarkdownPreviewVisible && supportsMarkdownPreview {
+                    MarkdownPreviewResizeHandle { delta in
+                        markdownPreviewWidth = min(
+                            max(resolvedMarkdownPreviewWidth - delta, scaled(Self.markdownPreviewSidebarMinWidth)),
+                            scaled(Self.markdownPreviewSidebarMaxWidth)
+                        )
+                    }
+
                     MarkdownPreviewSidebar(
                         title: nil,
                         markdown: draftText,
-                        width: scaled(Self.markdownPreviewSidebarWidth),
+                        width: resolvedMarkdownPreviewWidth,
                         minHeight: scaled(180),
                         fontScale: zoomScale,
                         scrollProgress: markdownPreviewScrollProgress
@@ -1845,6 +1914,8 @@ struct StandaloneNoteEditorView: View {
                     secondaryTextColor: theme.secondaryText
                 )
             }
+        case .fileBackedMarkdown, .fileBackedText:
+            EmptyView()
         }
     }
 
@@ -1868,6 +1939,7 @@ struct StandaloneNoteEditorView: View {
     }
 
     private func toggleMarkdownPreview() {
+        guard supportsMarkdownPreview else { return }
         isMarkdownPreviewVisible.toggle()
     }
 
@@ -1881,6 +1953,29 @@ struct StandaloneNoteEditorView: View {
 
     private func t(_ english: String, _ japanese: String) -> String {
         appDelegate.settings.settingsLanguage == .japanese ? japanese : english
+    }
+}
+
+struct MarkdownPreviewResizeHandle: View {
+    let onDrag: (CGFloat) -> Void
+
+    var body: some View {
+        Rectangle()
+            .fill(Color.clear)
+            .frame(width: 8)
+            .overlay(
+                Capsule()
+                    .fill(Color.white.opacity(0.22))
+                    .frame(width: 3)
+            )
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { value in
+                        onDrag(value.translation.width)
+                    }
+            )
+            .help("Resize Markdown preview")
     }
 }
 

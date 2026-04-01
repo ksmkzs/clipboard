@@ -318,12 +318,12 @@ struct SettingsView: View {
                         shortcut: binding(for: .redo)
                     )
                     shortcutRow(
-                        title: t("Join selected item into one sentence", "選択中の項目を一文に整形"),
+                        title: t("Transform item into one sentence", "選択中の項目を一文に整形"),
                         target: .copyJoined,
                         shortcut: binding(for: .copyJoined)
                     )
                     shortcutRow(
-                        title: t("Normalize selected item whitespace", "選択中の項目の空白を整形"),
+                        title: t("Normalize item whitespace", "選択中の項目の空白を整形"),
                         target: .copyNormalized,
                         shortcut: binding(for: .copyNormalized)
                     )
@@ -730,9 +730,9 @@ struct SettingsView: View {
         case .moveLineDown:
             return t("Move line", "行単位で移動")
         case .copyJoined:
-            return t("Join into one sentence", "選択中の項目を一文に整形")
+            return t("Transform item into one sentence", "選択中の項目を一文に整形")
         case .copyNormalized:
-            return t("Normalize whitespace", "選択中の項目の空白を整形")
+            return t("Normalize item whitespace", "選択中の項目の空白を整形")
         case .toggleMarkdownPreview:
             return t("Markdown preview", "Markdown プレビュー")
         case .joinLines:
@@ -764,13 +764,13 @@ struct SettingsView: View {
             )
         case .globalCopyJoined:
             return items(
-                en: ["Scope: global", "Action: copy the current selection after trimming each line edge and removing line breaks", "Source: selected text in the front app", "Default: \(HotKeyManager.displayString(for: AppSettings.defaultGlobalCopyJoinedShortcut))", "Default state: on"],
-                ja: ["対象: グローバル", "動作: 前面アプリの選択テキストを、各行の端を削ってから改行を消してコピーする", "入力: 前面アプリの選択テキスト", "初期値: \(HotKeyManager.displayString(for: AppSettings.defaultGlobalCopyJoinedShortcut))", "初期状態: オン"]
+                en: ["Scope: global", "Action: replace the current clipboard text with a one-line variant", "Source: current clipboard text", "Default: \(HotKeyManager.displayString(for: AppSettings.defaultGlobalCopyJoinedShortcut))", "Default state: on"],
+                ja: ["対象: グローバル", "動作: 現在のクリップボード内容を、一文化して上書きする", "入力: 現在のクリップボード内容", "初期値: \(HotKeyManager.displayString(for: AppSettings.defaultGlobalCopyJoinedShortcut))", "初期状態: オン"]
             )
         case .globalCopyNormalized:
             return items(
-                en: ["Scope: global", "Action: copy the current selection while keeping line breaks and trimming each line edge", "Source: selected text in the front app", "Default: \(HotKeyManager.displayString(for: AppSettings.defaultGlobalCopyNormalizedShortcut))", "Default state: on"],
-                ja: ["対象: グローバル", "動作: 前面アプリの選択テキストを、改行は維持したまま各行の端を削ってコピーする", "入力: 前面アプリの選択テキスト", "初期値: \(HotKeyManager.displayString(for: AppSettings.defaultGlobalCopyNormalizedShortcut))", "初期状態: オン"]
+                en: ["Scope: global", "Action: replace the current clipboard text with a whitespace-normalized variant", "Source: current clipboard text", "Default: \(HotKeyManager.displayString(for: AppSettings.defaultGlobalCopyNormalizedShortcut))", "Default state: on"],
+                ja: ["対象: グローバル", "動作: 現在のクリップボード内容を、改行は維持したまま整形して上書きする", "入力: 現在のクリップボード内容", "初期値: \(HotKeyManager.displayString(for: AppSettings.defaultGlobalCopyNormalizedShortcut))", "初期状態: オン"]
             )
         case .newNote:
             return items(
@@ -834,13 +834,13 @@ struct SettingsView: View {
             )
         case .copyJoined:
             return items(
-                en: ["Scope: standard window", "Action: copy a single-line variant of the selected text item"],
-                ja: ["対象: 標準ウィンドウ", "動作: 選択中の text item を一文化した結果だけコピーする"]
+                en: ["Scope: standard window", "Action: transform the focused item into a single-line version in place"],
+                ja: ["対象: 標準ウィンドウ", "動作: フォーカス中の項目をその場で一文化する"]
             )
         case .copyNormalized:
             return items(
-                en: ["Scope: standard window", "Action: copy a whitespace-normalized variant of the selected text item"],
-                ja: ["対象: 標準ウィンドウ", "動作: 選択中の text item を整形した結果だけコピーする"]
+                en: ["Scope: standard window", "Action: normalize the focused item in place while keeping line breaks"],
+                ja: ["対象: 標準ウィンドウ", "動作: フォーカス中の項目を改行を維持したままその場で整形する"]
             )
         case .toggleMarkdownPreview:
             return items(
@@ -1148,8 +1148,8 @@ struct SettingsView: View {
                     (t("Delete selected item", "選択中の項目を削除"), draft.deleteItemShortcut),
                     (t("Undo", "元に戻す"), draft.undoShortcut),
                     (t("Redo", "やり直し"), draft.redoShortcut),
-                    (t("Join selected item into one sentence", "選択中の項目を一文に整形"), draft.copyJoinedShortcut),
-                    (t("Normalize selected item whitespace", "選択中の項目の空白を整形"), draft.copyNormalizedShortcut)
+                    (t("Transform item into one sentence", "選択中の項目を一文に整形"), draft.copyJoinedShortcut),
+                    (t("Normalize item whitespace", "選択中の項目の空白を整形"), draft.copyNormalizedShortcut)
                 ]
             ),
             (

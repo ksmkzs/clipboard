@@ -28,6 +28,30 @@ enum HotKeyRegistrationState: Equatable {
 final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWindowDelegate {
     typealias CodexIntegrationStatus = ClipboardCodexIntegrationStatus
 
+    enum FileBackedDocumentKind: Equatable {
+        case markdown
+        case text
+
+        var supportsMarkdownPreview: Bool {
+            self == .markdown
+        }
+    }
+
+    enum ExternalEditorMode: Equatable {
+        case codex
+        case fileBacked(FileBackedDocumentKind)
+
+        var isCodex: Bool {
+            if case .codex = self { return true }
+            return false
+        }
+
+        var fileKind: FileBackedDocumentKind? {
+            if case let .fileBacked(kind) = self { return kind }
+            return nil
+        }
+    }
+
     struct CodexDraftContext: Equatable {
         let sessionID: String
         let projectRootURL: URL?
@@ -86,6 +110,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         case translateNow = 101
         case openSettings = 102
         case newNote = 103
+        case newMarkdownFile = 104
+        case newTextFile = 105
+        case openMarkdownFile = 106
+        case openTextFile = 107
         case quit = 199
     }
     
@@ -104,9 +132,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     private var noteEditorWindowController: NSWindowController?
     private var noteEditorItemID: UUID?
     private var noteEditorExternalFileURL: URL?
+    private var noteEditorExternalMode: ExternalEditorMode?
     private var noteEditorCompletionMarkerURL: URL?
     private var noteEditorSessionStateURL: URL?
     private var noteEditorDraftText = ""
+    private var noteEditorLastPersistedText = ""
+    private var noteEditorObservedFileModificationDate: Date?
+    private var noteEditorObservedFileContentSnapshot = ""
+    private var noteEditorExternalFileMonitor: DispatchSourceTimer?
+    private var noteEditorExternalChangePromptActive = false
     private var noteEditorAutosaveWorkItem: DispatchWorkItem?
     private var noteEditorShouldCommitExternalDraft = false
     private var noteEditorIsOrphanedCodexDraft = false
@@ -219,20 +253,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         false
     }
 
-    func application(_ sender: NSApplication, openFiles filenames: [String]) {
-        guard let firstPath = filenames.first else {
-            sender.reply(toOpenOrPrint: .failure)
-            return
+    @discardableResult
+    private func handleTextDocumentOpenURLs(_ urls: [URL]) -> Bool {
+        var didOpenAny = false
+        for fileURL in urls.map(\.standardizedFileURL) {
+            if openTextDocumentFromSystem(for: fileURL) {
+                didOpenAny = true
+            }
         }
+        return didOpenAny
+    }
 
-        let fileURL = URL(fileURLWithPath: firstPath).standardizedFileURL
-        openExternalCodexEditor(
-            for: fileURL,
-            sessionID: UUID().uuidString,
-            projectRootURL: fileURL.deletingLastPathComponent(),
-            sessionStateURL: nil
-        )
-        sender.reply(toOpenOrPrint: .success)
+    func application(_ sender: NSApplication, openFile filename: String) -> Bool {
+        handleTextDocumentOpenURLs([URL(fileURLWithPath: filename)])
+    }
+
+    func application(_ sender: NSApplication, openFiles filenames: [String]) {
+        if handleTextDocumentOpenURLs(filenames.map { URL(fileURLWithPath: $0) }) {
+            sender.reply(toOpenOrPrint: .success)
+        } else {
+            sender.reply(toOpenOrPrint: .failure)
+        }
+    }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        _ = handleTextDocumentOpenURLs(urls)
     }
     
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -266,6 +311,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         clipboardController.startMonitoring()
         startCodexOpenRequestMonitor()
         performLaunchAutomationIfRequested()
+
+        let launchFileURLs = ProcessInfo.processInfo.arguments
+            .dropFirst()
+            .filter { !$0.hasPrefix("-") }
+            .map { URL(fileURLWithPath: $0) }
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+        if !launchFileURLs.isEmpty {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                guard let self else { return }
+                _ = self.handleTextDocumentOpenURLs(launchFileURLs)
+            }
+        }
     }
 
     private func startCodexOpenRequestMonitor() {
@@ -567,7 +624,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         newNoteItem.tag = MenuTag.newNote.rawValue
         newNoteItem.target = self
         statusMenu.addItem(newNoteItem)
-        
+
+        let newMarkdownItem = NSMenuItem(
+            title: "New Markdown File…",
+            action: #selector(newMarkdownFileFromMenu),
+            keyEquivalent: ""
+        )
+        newMarkdownItem.tag = MenuTag.newMarkdownFile.rawValue
+        newMarkdownItem.target = self
+        statusMenu.addItem(newMarkdownItem)
+
+        let newTextItem = NSMenuItem(
+            title: "New Text File…",
+            action: #selector(newTextFileFromMenu),
+            keyEquivalent: ""
+        )
+        newTextItem.tag = MenuTag.newTextFile.rawValue
+        newTextItem.target = self
+        statusMenu.addItem(newTextItem)
+
+        let openMarkdownItem = NSMenuItem(
+            title: "Open Markdown File…",
+            action: #selector(openMarkdownFileFromMenu),
+            keyEquivalent: ""
+        )
+        openMarkdownItem.tag = MenuTag.openMarkdownFile.rawValue
+        openMarkdownItem.target = self
+        statusMenu.addItem(openMarkdownItem)
+
+        let openTextItem = NSMenuItem(
+            title: "Open Text File…",
+            action: #selector(openTextFileFromMenu),
+            keyEquivalent: ""
+        )
+        openTextItem.tag = MenuTag.openTextFile.rawValue
+        openTextItem.target = self
+        statusMenu.addItem(openTextItem)
+
         statusMenu.addItem(.separator())
         
         let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettingsFromMenu), keyEquivalent: ",")
@@ -2333,7 +2426,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         let noteFrame = noteEditorWindowController?.window?.frame
         let noteItemID = noteEditorItemID
         let noteExternalFileURL = noteEditorExternalFileURL
+        let noteExternalMode = noteEditorExternalMode
         let noteDraft = noteEditorDraftText
+        let noteLastPersistedText = noteEditorLastPersistedText
         let noteIsOrphanedCodexDraft = noteEditorIsOrphanedCodexDraft
         let noteCodexSessionID = noteEditorCodexSessionID
         let noteCodexProjectRootURL = noteEditorCodexProjectRootURL
@@ -2375,21 +2470,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             if let noteFrame, let window = controller.window {
                 window.setFrame(noteFrame, display: false)
             }
-        } else if noteWasVisible, let externalFileURL = noteExternalFileURL {
+        } else if noteWasVisible, noteExternalMode?.fileKind != nil || noteExternalFileURL != nil {
             noteEditorWindowController?.window?.orderOut(nil)
             noteEditorWindowController = nil
-            let controller = makeExternalFileEditorWindowController(
-                fileURL: externalFileURL,
-                initialText: noteDraft,
-                isOrphaned: noteIsOrphanedCodexDraft,
-                codexContext: noteCodexSessionID.map {
-                    CodexDraftContext(sessionID: $0, projectRootURL: noteCodexProjectRootURL)
-                }
-            )
+            let controller: NSWindowController
+            if let fileKind = noteExternalMode?.fileKind {
+                controller = makeFileBackedEditorWindowController(
+                    fileURL: noteExternalFileURL,
+                    initialText: noteDraft,
+                    kind: fileKind
+                )
+            } else {
+                guard let externalFileURL = noteExternalFileURL else { return }
+                controller = makeExternalFileEditorWindowController(
+                    fileURL: externalFileURL,
+                    initialText: noteDraft,
+                    isOrphaned: noteIsOrphanedCodexDraft,
+                    codexContext: noteCodexSessionID.map {
+                        CodexDraftContext(sessionID: $0, projectRootURL: noteCodexProjectRootURL)
+                    }
+                )
+            }
+            noteEditorLastPersistedText = noteLastPersistedText
             if let noteFrame, let window = controller.window {
                 window.setFrame(noteFrame, display: false)
             }
-            if !noteIsOrphanedCodexDraft {
+            if noteExternalMode?.isCodex == true, !noteIsOrphanedCodexDraft {
                 startCodexSessionStateMonitor()
             }
         }
@@ -2532,35 +2638,345 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         }
     }
 
-    func openStandaloneNoteEditor(for itemID: UUID) {
-        if noteEditorExternalFileURL != nil,
-           noteEditorWindowController?.window?.isVisible == true {
-            dismissStandaloneNoteEditorWindow(copyToClipboard: false)
+    private var isCurrentExternalEditorCodex: Bool {
+        noteEditorExternalMode?.isCodex == true
+    }
+
+    private var currentFileBackedDocumentKind: FileBackedDocumentKind? {
+        noteEditorExternalMode?.fileKind
+    }
+
+    private var isCurrentEditorFileBacked: Bool {
+        currentFileBackedDocumentKind != nil
+    }
+
+    private var noteEditorHasUnsavedFileChanges: Bool {
+        isCurrentEditorFileBacked && noteEditorDraftText != noteEditorLastPersistedText
+    }
+
+    private func inferredFileBackedDocumentKind(for fileURL: URL, preferredKind: FileBackedDocumentKind? = nil) -> FileBackedDocumentKind {
+        if let preferredKind {
+            return preferredKind
         }
-        if let currentItemID = noteEditorItemID,
-           currentItemID != itemID {
-            finalizeNoteEditorSession(copyToClipboard: false)
+
+        switch fileURL.pathExtension.lowercased() {
+        case "md", "markdown", "mdown", "mkd":
+            return .markdown
+        default:
+            return .text
         }
-        suppressPanelAutoClose = true
-        NSApp.activate(ignoringOtherApps: true)
-        let controller = makeNoteEditorWindowController(itemID: itemID)
-        if let window = controller.window {
-            let referenceFrame = panel.isVisible ? panel.frame : window.frame
-            let screen = screen(containing: referenceFrame) ?? panel.screen ?? window.screen ?? NSScreen.main
-            let visibleFrame = (screen?.visibleFrame ?? window.frame).insetBy(dx: Layout.screenMargin, dy: Layout.screenMargin)
-            let desiredFrame = Self.auxiliaryWindowPlacement(
-                anchorFrame: referenceFrame,
-                visibleFrame: visibleFrame,
-                windowSize: window.frame.size,
-                gap: 16
+    }
+
+    private func readPlainTextDocument(at fileURL: URL, preferredKind: FileBackedDocumentKind? = nil) -> (kind: FileBackedDocumentKind, text: String)? {
+        var encoding = String.Encoding.utf8
+        guard let text = try? String(contentsOf: fileURL, usedEncoding: &encoding) else {
+            return nil
+        }
+        return (inferredFileBackedDocumentKind(for: fileURL, preferredKind: preferredKind), text)
+    }
+
+    @discardableResult
+    private func openTextDocumentFromSystem(for fileURL: URL) -> Bool {
+        guard let document = readPlainTextDocument(at: fileURL) else {
+            presentPlainTextOpenFailure(for: fileURL)
+            return false
+        }
+        NSApp.unhide(nil)
+        promoteAppForExternalEditorIfNeeded()
+        openFileBackedEditor(for: fileURL, kind: document.kind, initialText: document.text)
+        return true
+    }
+
+    private func openTextDocumentViaPanel(preferredKind: FileBackedDocumentKind) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.resolvesAliases = true
+        panel.prompt = preferredKind == .markdown
+            ? uiText("Open Markdown", "Markdown を開く")
+            : uiText("Open Text", "テキストを開く")
+        if preferredKind == .markdown {
+            panel.allowedFileTypes = ["md", "markdown", "mdown", "mkd"]
+        }
+
+        guard panel.runModal() == .OK, let fileURL = panel.url else {
+            return
+        }
+
+        guard let document = readPlainTextDocument(at: fileURL, preferredKind: preferredKind) else {
+            presentPlainTextOpenFailure(for: fileURL)
+            return
+        }
+        openFileBackedEditor(for: fileURL, kind: document.kind, initialText: document.text)
+    }
+
+    private func presentPlainTextOpenFailure(for fileURL: URL) {
+        let alert = NSAlert()
+        alert.messageText = uiText("Could not open text file", "テキストファイルを開けませんでした")
+        alert.informativeText = uiText(
+            "\(fileURL.lastPathComponent) could not be decoded as plain text.",
+            "\(fileURL.lastPathComponent) をプレーンテキストとして読み込めませんでした。"
+        )
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    private func openUntitledFileBackedEditor(kind: FileBackedDocumentKind) {
+        requestStandaloneEditorReplacement { [weak self] canOpen in
+            guard let self, canOpen else { return }
+            self.noteEditorExternalFileURL = nil
+            self.noteEditorExternalMode = .fileBacked(kind)
+            self.noteEditorCompletionMarkerURL = nil
+            self.noteEditorSessionStateURL = nil
+            self.noteEditorItemID = nil
+            self.noteEditorDraftText = ""
+            self.noteEditorLastPersistedText = ""
+            self.noteEditorObservedFileModificationDate = nil
+            self.noteEditorObservedFileContentSnapshot = ""
+            self.noteEditorShouldCommitExternalDraft = false
+            self.noteEditorIsOrphanedCodexDraft = false
+            self.noteEditorCodexSessionID = nil
+            self.noteEditorCodexProjectRootURL = nil
+
+            self.suppressPanelAutoClose = true
+            self.activateCurrentApp()
+            let controller = self.makeFileBackedEditorWindowController(
+                fileURL: nil,
+                initialText: "",
+                kind: kind
             )
-            window.setFrame(desiredFrame, display: false)
+            if let window = controller.window {
+                if self.panel.isVisible {
+                    let referenceFrame = self.panel.frame
+                    let screen = self.screen(containing: referenceFrame) ?? self.panel.screen ?? window.screen ?? NSScreen.main
+                    let visibleFrame = (screen?.visibleFrame ?? window.frame).insetBy(dx: Layout.screenMargin, dy: Layout.screenMargin)
+                    let desiredFrame = Self.auxiliaryWindowPlacement(
+                        anchorFrame: referenceFrame,
+                        visibleFrame: visibleFrame,
+                        windowSize: window.frame.size,
+                        gap: 16
+                    )
+                    window.setFrame(desiredFrame, display: false)
+                } else {
+                    window.center()
+                }
+            }
+            controller.showWindow(nil)
+            controller.window?.orderFrontRegardless()
+            controller.window?.makeKeyAndOrderFront(nil)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                self?.suppressPanelAutoClose = false
+            }
         }
-        controller.showWindow(nil)
-        controller.window?.orderFrontRegardless()
-        controller.window?.makeKeyAndOrderFront(nil)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-            self?.suppressPanelAutoClose = false
+    }
+
+    private func requestStandaloneEditorReplacement(completion: @escaping (Bool) -> Void) {
+        guard noteEditorWindowController?.window?.isVisible == true else {
+            completion(true)
+            return
+        }
+
+        if isCurrentEditorFileBacked, noteEditorHasUnsavedFileChanges {
+            promptToCloseDirtyFileEditor { [weak self] shouldClose in
+                guard let self else {
+                    completion(false)
+                    return
+                }
+                guard shouldClose else {
+                    completion(false)
+                    return
+                }
+                self.dismissStandaloneNoteEditorWindow(copyToClipboard: false)
+                DispatchQueue.main.async {
+                    completion(true)
+                }
+            }
+            return
+        }
+
+        if noteEditorExternalFileURL != nil {
+            dismissStandaloneNoteEditorWindow(copyToClipboard: false)
+        } else {
+            dismissStandaloneNoteEditorWindow(copyToClipboard: true)
+        }
+        DispatchQueue.main.async {
+            completion(true)
+        }
+    }
+
+    private func promptToCloseDirtyFileEditor(completion: @escaping (Bool) -> Void) {
+        guard let window = noteEditorWindowController?.window else {
+            completion(true)
+            return
+        }
+
+        let alert = NSAlert()
+        alert.messageText = uiText("Save changes before closing?", "閉じる前に保存しますか？")
+        alert.informativeText = uiText(
+            "Choose whether to keep the current text on your clipboard or save it as a file before closing.",
+            "閉じる前に、現在のテキストをクリップボードへ保存するか、ファイルとして保存するかを選んでください。"
+        )
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: uiText("Save to Clipboard", "クリップボードに保存"))
+        alert.addButton(withTitle: uiText("Save File", "ファイルとして保存"))
+        alert.addButton(withTitle: uiText("Cancel", "キャンセル"))
+
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self else {
+                completion(false)
+                return
+            }
+
+            switch response {
+            case .alertFirstButtonReturn:
+                _ = self.copyTextToClipboard(self.noteEditorDraftText, feedbackMessage: "Copied")
+                completion(true)
+            case .alertSecondButtonReturn:
+                completion(self.saveCurrentEditorTextToFile())
+            default:
+                completion(false)
+            }
+        }
+    }
+
+    private func promptFileBackedSaveDestination(forceSaveAs: Bool) {
+        guard let window = noteEditorWindowController?.window else {
+            return
+        }
+
+        let alert = NSAlert()
+        alert.messageText = uiText("Choose how to save", "保存方法を選んでください")
+        alert.informativeText = uiText(
+            "You can save the current text to your clipboard or save it as a file.",
+            "現在のテキストをクリップボードへ保存するか、ファイルとして保存するかを選べます。"
+        )
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: uiText("Save to Clipboard", "クリップボードに保存"))
+        alert.addButton(withTitle: uiText("Save File", "ファイルとして保存"))
+        alert.addButton(withTitle: uiText("Cancel", "キャンセル"))
+
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self else { return }
+
+            switch response {
+            case .alertFirstButtonReturn:
+                _ = self.copyTextToClipboard(self.noteEditorDraftText, feedbackMessage: "Copied")
+            case .alertSecondButtonReturn:
+                _ = self.saveCurrentEditorTextToFile(forceSaveAs: forceSaveAs)
+            default:
+                break
+            }
+        }
+    }
+
+    @discardableResult
+    private func saveCurrentEditorTextToFile(forceSaveAs: Bool = false) -> Bool {
+        if let fileURL = noteEditorExternalFileURL, !forceSaveAs {
+            let didSave = saveExternalEditorText(noteEditorDraftText, to: fileURL)
+            if didSave {
+                noteEditorLastPersistedText = noteEditorDraftText
+                noteEditorObservedFileModificationDate = fileModificationDate(for: fileURL)
+                noteEditorObservedFileContentSnapshot = noteEditorDraftText
+            }
+            return didSave
+        }
+
+        let savePanel = NSSavePanel()
+        savePanel.canCreateDirectories = true
+        savePanel.isExtensionHidden = false
+        savePanel.nameFieldStringValue = defaultSavePanelFileName()
+        guard savePanel.runModal() == .OK, let destinationURL = savePanel.url else {
+            return false
+        }
+
+        let didSave = saveExternalEditorText(noteEditorDraftText, to: destinationURL)
+        if didSave {
+            noteEditorExternalFileURL = destinationURL.standardizedFileURL
+            noteEditorLastPersistedText = noteEditorDraftText
+            noteEditorObservedFileModificationDate = fileModificationDate(for: destinationURL)
+            noteEditorObservedFileContentSnapshot = noteEditorDraftText
+            noteEditorWindowController?.window?.representedURL = destinationURL
+            noteEditorWindowController?.window?.title = externalEditorWindowTitle(
+                for: destinationURL,
+                isOrphaned: false,
+                codexContext: nil
+            )
+            startExternalFileMonitorIfNeeded()
+        }
+        return didSave
+    }
+
+    private func saveStandaloneEditor() {
+        if isCurrentEditorFileBacked {
+            if noteEditorExternalFileURL != nil {
+                _ = saveCurrentEditorTextToFile()
+            } else {
+                _ = copyTextToClipboard(noteEditorDraftText, feedbackMessage: "Copied")
+            }
+            return
+        }
+        _ = copyTextToClipboard(noteEditorDraftText, feedbackMessage: "Copied")
+    }
+
+    private func saveStandaloneEditorAs() {
+        if isCurrentEditorFileBacked {
+            promptFileBackedSaveDestination(forceSaveAs: true)
+            return
+        }
+        _ = copyTextToClipboard(noteEditorDraftText, feedbackMessage: "Copied")
+    }
+
+    private func defaultSavePanelFileName() -> String {
+        if let fileURL = noteEditorExternalFileURL {
+            return fileURL.lastPathComponent
+        }
+        switch currentFileBackedDocumentKind {
+        case .markdown:
+            return "Untitled.md"
+        case .text, .none:
+            return "Untitled.txt"
+        }
+    }
+
+    private func fileModificationDate(for fileURL: URL) -> Date? {
+        let values = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey])
+        return values?.contentModificationDate
+    }
+
+    private func uiText(_ english: String, _ japanese: String) -> String {
+        settings.settingsLanguage == .japanese ? japanese : english
+    }
+
+    func openStandaloneNoteEditor(for itemID: UUID) {
+        requestStandaloneEditorReplacement { [weak self] canOpen in
+            guard let self, canOpen else { return }
+            if let currentItemID = self.noteEditorItemID,
+               currentItemID != itemID {
+                self.finalizeNoteEditorSession(copyToClipboard: false)
+            }
+            self.suppressPanelAutoClose = true
+            NSApp.activate(ignoringOtherApps: true)
+            let controller = self.makeNoteEditorWindowController(itemID: itemID)
+            if let window = controller.window {
+                let referenceFrame = self.panel.isVisible ? self.panel.frame : window.frame
+                let screen = self.screen(containing: referenceFrame) ?? self.panel.screen ?? window.screen ?? NSScreen.main
+                let visibleFrame = (screen?.visibleFrame ?? window.frame).insetBy(dx: Layout.screenMargin, dy: Layout.screenMargin)
+                let desiredFrame = Self.auxiliaryWindowPlacement(
+                    anchorFrame: referenceFrame,
+                    visibleFrame: visibleFrame,
+                    windowSize: window.frame.size,
+                    gap: 16
+                )
+                window.setFrame(desiredFrame, display: false)
+            }
+            controller.showWindow(nil)
+            controller.window?.orderFrontRegardless()
+            controller.window?.makeKeyAndOrderFront(nil)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                self?.suppressPanelAutoClose = false
+            }
         }
     }
 
@@ -2589,7 +3005,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         previouslyActiveApp = targetApp
         placementTargetApp = targetApp
 
-        if let currentURL = noteEditorExternalFileURL,
+        if noteEditorExternalMode?.isCodex == true,
+           let currentURL = noteEditorExternalFileURL,
            currentURL == standardizedURL,
            let window = noteEditorWindowController?.window,
            window.isVisible {
@@ -2609,52 +3026,116 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             return
         }
 
-        if noteEditorWindowController?.window?.isVisible == true {
-            dismissStandaloneNoteEditorWindow(copyToClipboard: false)
-        }
+        requestStandaloneEditorReplacement { [weak self] canOpen in
+            guard let self, canOpen else { return }
+            self.noteEditorExternalFileURL = standardizedURL
+            self.noteEditorExternalMode = .codex
+            self.noteEditorCompletionMarkerURL = codexCompletionMarkerURL(for: standardizedURL)
+            self.noteEditorSessionStateURL = resolvedSessionStateURL
+            self.noteEditorItemID = nil
+            self.noteEditorDraftText = (try? String(contentsOf: standardizedURL, encoding: .utf8)) ?? ""
+            self.noteEditorLastPersistedText = self.noteEditorDraftText
+            self.noteEditorShouldCommitExternalDraft = false
+            self.noteEditorIsOrphanedCodexDraft = false
+            self.noteEditorCodexSessionID = sessionID
+            self.noteEditorCodexProjectRootURL = standardizedProjectRootURL
 
-        noteEditorExternalFileURL = standardizedURL
-        noteEditorCompletionMarkerURL = codexCompletionMarkerURL(for: standardizedURL)
-        noteEditorSessionStateURL = resolvedSessionStateURL
-        noteEditorItemID = nil
-        noteEditorDraftText = (try? String(contentsOf: standardizedURL, encoding: .utf8)) ?? ""
-        noteEditorShouldCommitExternalDraft = false
-        noteEditorIsOrphanedCodexDraft = false
-        noteEditorCodexSessionID = sessionID
-        noteEditorCodexProjectRootURL = standardizedProjectRootURL
-
-        suppressPanelAutoClose = true
-        promoteAppForExternalEditorIfNeeded()
-        NSApp.unhide(nil)
-        activateCurrentApp()
-        let controller = makeExternalFileEditorWindowController(
-            fileURL: standardizedURL,
-            codexContext: currentCodexDraftContext()
-        )
-        if let window = controller.window {
-            if panel.isVisible {
-                let referenceFrame = panel.frame
-                let screen = screen(containing: referenceFrame) ?? panel.screen ?? window.screen ?? NSScreen.main
-                let visibleFrame = (screen?.visibleFrame ?? window.frame).insetBy(dx: Layout.screenMargin, dy: Layout.screenMargin)
-                let desiredFrame = Self.auxiliaryWindowPlacement(
-                    anchorFrame: referenceFrame,
-                    visibleFrame: visibleFrame,
-                    windowSize: window.frame.size,
-                    gap: 16
-                )
-                window.setFrame(desiredFrame, display: false)
-            } else {
-                window.center()
+            self.suppressPanelAutoClose = true
+            self.promoteAppForExternalEditorIfNeeded()
+            NSApp.unhide(nil)
+            self.activateCurrentApp()
+            let controller = self.makeExternalFileEditorWindowController(
+                fileURL: standardizedURL,
+                codexContext: self.currentCodexDraftContext()
+            )
+            if let window = controller.window {
+                if self.panel.isVisible {
+                    let referenceFrame = self.panel.frame
+                    let screen = self.screen(containing: referenceFrame) ?? self.panel.screen ?? window.screen ?? NSScreen.main
+                    let visibleFrame = (screen?.visibleFrame ?? window.frame).insetBy(dx: Layout.screenMargin, dy: Layout.screenMargin)
+                    let desiredFrame = Self.auxiliaryWindowPlacement(
+                        anchorFrame: referenceFrame,
+                        visibleFrame: visibleFrame,
+                        windowSize: window.frame.size,
+                        gap: 16
+                    )
+                    window.setFrame(desiredFrame, display: false)
+                } else {
+                    window.center()
+                }
+            }
+            controller.showWindow(nil)
+            controller.window?.orderFrontRegardless()
+            controller.window?.makeKeyAndOrderFront(nil)
+            NSApp.unhide(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            self.startCodexSessionStateMonitor()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                self?.suppressPanelAutoClose = false
             }
         }
-        controller.showWindow(nil)
-        controller.window?.orderFrontRegardless()
-        controller.window?.makeKeyAndOrderFront(nil)
-        NSApp.unhide(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        startCodexSessionStateMonitor()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-            self?.suppressPanelAutoClose = false
+    }
+
+    private func openFileBackedEditor(
+        for fileURL: URL,
+        kind: FileBackedDocumentKind,
+        initialText: String
+    ) {
+        let standardizedURL = fileURL.standardizedFileURL
+        if noteEditorExternalMode?.fileKind == kind,
+           let currentURL = noteEditorExternalFileURL,
+           currentURL == standardizedURL,
+           let window = noteEditorWindowController?.window,
+           window.isVisible {
+            activateCurrentApp()
+            noteEditorWindowController?.showWindow(nil)
+            window.orderFront(nil)
+            window.makeKeyAndOrderFront(nil)
+            return
+        }
+        requestStandaloneEditorReplacement { [weak self] canOpen in
+            guard let self, canOpen else { return }
+            self.noteEditorExternalFileURL = standardizedURL
+            self.noteEditorExternalMode = .fileBacked(kind)
+            self.noteEditorCompletionMarkerURL = nil
+            self.noteEditorSessionStateURL = nil
+            self.noteEditorItemID = nil
+            self.noteEditorDraftText = initialText
+            self.noteEditorLastPersistedText = initialText
+            self.noteEditorShouldCommitExternalDraft = false
+            self.noteEditorIsOrphanedCodexDraft = false
+            self.noteEditorCodexSessionID = nil
+            self.noteEditorCodexProjectRootURL = nil
+
+            self.suppressPanelAutoClose = true
+            self.activateCurrentApp()
+            let controller = self.makeFileBackedEditorWindowController(
+                fileURL: standardizedURL,
+                initialText: initialText,
+                kind: kind
+            )
+            if let window = controller.window {
+                if self.panel.isVisible {
+                    let referenceFrame = self.panel.frame
+                    let screen = self.screen(containing: referenceFrame) ?? self.panel.screen ?? window.screen ?? NSScreen.main
+                    let visibleFrame = (screen?.visibleFrame ?? window.frame).insetBy(dx: Layout.screenMargin, dy: Layout.screenMargin)
+                    let desiredFrame = Self.auxiliaryWindowPlacement(
+                        anchorFrame: referenceFrame,
+                        visibleFrame: visibleFrame,
+                        windowSize: window.frame.size,
+                        gap: 16
+                    )
+                    window.setFrame(desiredFrame, display: false)
+                } else {
+                    window.center()
+                }
+            }
+            controller.showWindow(nil)
+            controller.window?.orderFrontRegardless()
+            controller.window?.makeKeyAndOrderFront(nil)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                self?.suppressPanelAutoClose = false
+            }
         }
     }
 
@@ -2820,6 +3301,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     private func makeNoteEditorWindowController(itemID: UUID) -> NSWindowController {
         noteEditorItemID = itemID
         noteEditorExternalFileURL = nil
+        noteEditorExternalMode = nil
         noteEditorCompletionMarkerURL = nil
         noteEditorSessionStateURL = nil
         noteEditorShouldCommitExternalDraft = false
@@ -2830,6 +3312,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             ?? dataManager.allItems().first(where: { $0.id == itemID }).flatMap(dataManager.resolvedText(for:))
             ?? ""
         noteEditorDraftText = initialText
+        noteEditorLastPersistedText = initialText
         _ = dataManager.saveWorkingNoteText(initialText, for: itemID)
 
         let rootView = StandaloneNoteEditorView(
@@ -2837,12 +3320,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             appDelegate: self,
             codexContext: nil,
             commitMode: .pasteToTarget,
+            initialMarkdownPreviewVisible: false,
             onDraftChange: { [weak self] text in
                 self?.noteEditorDraftText = text
                 self?.scheduleNoteEditorAutosave(itemID: itemID, text: text)
             },
             onCommit: { [weak self] text in
                 self?.commitManualNoteDraft(text, for: itemID)
+            },
+            onSave: { [weak self] in
+                self?.saveStandaloneEditor()
+            },
+            onSaveAs: { [weak self] in
+                self?.saveStandaloneEditorAs()
             },
             onClose: { [weak self] in
                 self?.closeStandaloneNoteEditor()
@@ -2876,17 +3366,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     ) -> NSWindowController {
         noteEditorItemID = nil
         noteEditorExternalFileURL = fileURL
+        noteEditorExternalMode = .codex
         noteEditorCompletionMarkerURL = isOrphaned ? nil : codexCompletionMarkerURL(for: fileURL)
         noteEditorShouldCommitExternalDraft = false
         noteEditorIsOrphanedCodexDraft = isOrphaned
         let resolvedInitialText = initialText ?? ((try? String(contentsOf: fileURL, encoding: .utf8)) ?? "")
         noteEditorDraftText = resolvedInitialText
+        noteEditorLastPersistedText = resolvedInitialText
 
         let rootView = StandaloneNoteEditorView(
             initialText: resolvedInitialText,
             appDelegate: self,
             codexContext: codexContext,
             commitMode: isOrphaned ? .orphanedCodex : .returnToCodex,
+            initialMarkdownPreviewVisible: true,
             onDraftChange: { [weak self] text in
                 self?.noteEditorDraftText = text
             },
@@ -2896,6 +3389,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
                 } else {
                     self?.commitExternalCodexDraft(text, fileURL: fileURL)
                 }
+            },
+            onSave: { [weak self] in
+                self?.saveStandaloneEditor()
+            },
+            onSaveAs: { [weak self] in
+                self?.saveStandaloneEditorAs()
             },
             onClose: { [weak self] in
                 self?.closeStandaloneNoteEditor()
@@ -2923,7 +3422,79 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         return controller
     }
 
+    private func makeFileBackedEditorWindowController(
+        fileURL: URL?,
+        initialText: String,
+        kind: FileBackedDocumentKind
+    ) -> NSWindowController {
+        noteEditorItemID = nil
+        noteEditorExternalFileURL = fileURL
+        noteEditorExternalMode = .fileBacked(kind)
+        noteEditorCompletionMarkerURL = nil
+        noteEditorSessionStateURL = nil
+        noteEditorShouldCommitExternalDraft = false
+        noteEditorIsOrphanedCodexDraft = false
+        noteEditorCodexSessionID = nil
+        noteEditorCodexProjectRootURL = nil
+        noteEditorDraftText = initialText
+        noteEditorLastPersistedText = initialText
+        noteEditorObservedFileModificationDate = fileURL.flatMap(fileModificationDate(for:))
+        noteEditorObservedFileContentSnapshot = initialText
+
+        let rootView = StandaloneNoteEditorView(
+            initialText: initialText,
+            appDelegate: self,
+            codexContext: nil,
+            commitMode: kind == .markdown ? .fileBackedMarkdown : .fileBackedText,
+            initialMarkdownPreviewVisible: kind.supportsMarkdownPreview,
+            onDraftChange: { [weak self] text in
+                self?.noteEditorDraftText = text
+            },
+            onCommit: { _ in },
+            onSave: { [weak self] in
+                self?.saveStandaloneEditor()
+            },
+            onSaveAs: { [weak self] in
+                self?.saveStandaloneEditorAs()
+            },
+            onClose: { [weak self] in
+                self?.closeStandaloneNoteEditor()
+            },
+            onDiscardOrphanCodex: nil
+        )
+        .modelContainer(sharedContainer)
+
+        let hostingController = NSHostingController(rootView: rootView)
+        let window = NSWindow(contentViewController: hostingController)
+        window.title = externalEditorWindowTitle(for: fileURL, kind: kind, isOrphaned: false, codexContext: nil)
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window.setContentSize(NSSize(width: 720, height: 420))
+        window.contentMinSize = NSSize(width: 620, height: 320)
+        window.isReleasedWhenClosed = false
+        window.level = .normal
+        window.representedURL = fileURL
+        window.delegate = self
+
+        let controller = NSWindowController(window: window)
+        noteEditorWindowController = controller
+        startExternalFileMonitorIfNeeded()
+        return controller
+    }
+
     private func closeStandaloneNoteEditor() {
+        if isCurrentEditorFileBacked, noteEditorHasUnsavedFileChanges {
+            promptToCloseDirtyFileEditor { [weak self] shouldClose in
+                guard let self, shouldClose else { return }
+                self.dismissStandaloneNoteEditorWindow(copyToClipboard: false)
+            }
+            return
+        }
+
+        if isCurrentEditorFileBacked {
+            dismissStandaloneNoteEditorWindow(copyToClipboard: false)
+            return
+        }
+
         if noteEditorExternalFileURL != nil {
             if noteEditorIsOrphanedCodexDraft {
                 discardOrphanedCodexDraft()
@@ -2936,7 +3507,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     }
 
     private func finalizeNoteEditorSession(copyToClipboard: Bool) {
-        if let externalFileURL = noteEditorExternalFileURL {
+        if let externalFileURL = noteEditorExternalFileURL,
+           isCurrentExternalEditorCodex {
             let finalText = noteEditorDraftText
             _ = saveExternalEditorText(finalText, to: externalFileURL)
             if let completionMarkerURL = noteEditorCompletionMarkerURL {
@@ -2982,6 +3554,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
 
         let itemID = noteEditorItemID
         let externalFileURL = noteEditorExternalFileURL
+        let externalMode = noteEditorExternalMode
         let completionMarkerURL = noteEditorCompletionMarkerURL
         let sessionStateURL = noteEditorSessionStateURL
         let shouldCommitExternalDraft = noteEditorShouldCommitExternalDraft
@@ -2989,9 +3562,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         let finalText = noteEditorDraftText
         noteEditorAutosaveWorkItem?.cancel()
         noteEditorAutosaveWorkItem = nil
+        stopExternalFileMonitor()
         lastClosedNoteEditorItemID = itemID
         noteEditorItemID = nil
         noteEditorExternalFileURL = nil
+        noteEditorExternalMode = nil
         noteEditorCompletionMarkerURL = nil
         noteEditorSessionStateURL = nil
         noteEditorShouldCommitExternalDraft = false
@@ -2999,6 +3574,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         noteEditorCodexSessionID = nil
         noteEditorCodexProjectRootURL = nil
         noteEditorDraftText = ""
+        noteEditorLastPersistedText = ""
         noteEditorWindowController = nil
 
         window.contentViewController = NSViewController()
@@ -3007,33 +3583,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         DispatchQueue.main.async { [weak self] in
             if let externalFileURL {
                 self?.stopCodexSessionStateMonitor()
-                let closeOutcome = Self.externalEditorCloseOutcome(
-                    commitRequested: shouldCommitExternalDraft,
-                    isOrphaned: isOrphanedCodexDraft
-                )
-                switch closeOutcome {
-                case .persistAndSignal:
-                    _ = self?.saveExternalEditorText(finalText, to: externalFileURL)
-                    if let completionMarkerURL {
-                        self?.signalCodexCompletionMarker(at: completionMarkerURL)
+                if externalMode?.isCodex == true {
+                    let closeOutcome = Self.externalEditorCloseOutcome(
+                        commitRequested: shouldCommitExternalDraft,
+                        isOrphaned: isOrphanedCodexDraft
+                    )
+                    switch closeOutcome {
+                    case .persistAndSignal:
+                        _ = self?.saveExternalEditorText(finalText, to: externalFileURL)
+                        if let completionMarkerURL {
+                            self?.signalCodexCompletionMarker(at: completionMarkerURL)
+                        }
+                    case .discardOrphan:
+                        if saveOrphanedCodexDraftToClipboard,
+                           !finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            self?.copyTextToClipboard(finalText, feedbackMessage: "Copied")
+                        }
+                    case .signalOnly:
+                        if let completionMarkerURL {
+                            self?.signalCodexCompletionMarker(at: completionMarkerURL)
+                        }
                     }
-                case .discardOrphan:
-                    if saveOrphanedCodexDraftToClipboard,
-                       !finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        self?.copyTextToClipboard(finalText, feedbackMessage: "Copied")
+                    if let sessionStateURL {
+                        try? FileManager.default.removeItem(at: sessionStateURL)
                     }
-                case .signalOnly:
-                    if let completionMarkerURL {
-                        self?.signalCodexCompletionMarker(at: completionMarkerURL)
+                    self?.restoreAccessoryActivationPolicyIfNeeded()
+                    if closeOutcome == .persistAndSignal {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                            self?.reactivatePreviouslyActiveApp()
+                        }
                     }
-                }
-                if let sessionStateURL {
-                    try? FileManager.default.removeItem(at: sessionStateURL)
-                }
-                self?.restoreAccessoryActivationPolicyIfNeeded()
-                if closeOutcome == .persistAndSignal {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-                        self?.reactivatePreviouslyActiveApp()
+                } else {
+                    self?.restoreAccessoryActivationPolicyIfNeeded()
+                    if let sessionStateURL {
+                        try? FileManager.default.removeItem(at: sessionStateURL)
                     }
                 }
             } else {
@@ -3105,11 +3688,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
                     appDelegate: self,
                     codexContext: codexContext,
                     commitMode: .orphanedCodex,
+                    initialMarkdownPreviewVisible: true,
                     onDraftChange: { [weak self] text in
                         self?.noteEditorDraftText = text
                     },
                     onCommit: { [weak self] text in
                         self?.copyOrphanedCodexDraftToClipboardAndClose(text)
+                    },
+                    onSave: { [weak self] in
+                        self?.saveStandaloneEditor()
+                    },
+                    onSaveAs: { [weak self] in
+                        self?.saveStandaloneEditorAs()
                     },
                     onClose: { [weak self] in
                         self?.closeStandaloneNoteEditor()
@@ -3201,6 +3791,137 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         codexSessionStateMonitor = nil
     }
 
+    private func startExternalFileMonitorIfNeeded() {
+        stopExternalFileMonitor()
+        guard currentFileBackedDocumentKind != nil,
+              let fileURL = noteEditorExternalFileURL else {
+            return
+        }
+
+        noteEditorObservedFileModificationDate = fileModificationDate(for: fileURL)
+        noteEditorObservedFileContentSnapshot = (try? String(contentsOf: fileURL, encoding: .utf8)) ?? noteEditorDraftText
+
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + 0.8, repeating: 0.8)
+        timer.setEventHandler { [weak self] in
+            self?.checkForExternalFileChanges()
+        }
+        noteEditorExternalFileMonitor = timer
+        timer.resume()
+    }
+
+    private func stopExternalFileMonitor() {
+        noteEditorExternalFileMonitor?.cancel()
+        noteEditorExternalFileMonitor = nil
+        noteEditorExternalChangePromptActive = false
+    }
+
+    private func checkForExternalFileChanges() {
+        guard currentFileBackedDocumentKind != nil,
+              let fileURL = noteEditorExternalFileURL,
+              noteEditorWindowController?.window?.isVisible == true,
+              !noteEditorExternalChangePromptActive else {
+            return
+        }
+
+        let currentDate = fileModificationDate(for: fileURL)
+        guard currentDate != noteEditorObservedFileModificationDate else {
+            return
+        }
+
+        guard let diskText = try? String(contentsOf: fileURL, encoding: .utf8) else {
+            noteEditorObservedFileModificationDate = currentDate
+            return
+        }
+
+        if diskText == noteEditorObservedFileContentSnapshot {
+            noteEditorObservedFileModificationDate = currentDate
+            return
+        }
+
+        noteEditorObservedFileModificationDate = currentDate
+        noteEditorObservedFileContentSnapshot = diskText
+        promptForExternalFileChange(diskText: diskText, fileURL: fileURL)
+    }
+
+    private func promptForExternalFileChange(diskText: String, fileURL: URL) {
+        guard let window = noteEditorWindowController?.window else { return }
+        noteEditorExternalChangePromptActive = true
+
+        let alert = NSAlert()
+        alert.messageText = uiText("File changed outside ClipboardHistory", "外部でファイル内容が変更されました")
+        alert.informativeText = uiText(
+            "Choose whether to sync this window with the external file, or preserve the current draft separately first.",
+            "このウィンドウを外部ファイルの内容に同期するか、現在の下書きを別に保存してから同期するかを選んでください。"
+        )
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: uiText("Sync from File", "ファイル内容に同期"))
+        alert.addButton(withTitle: uiText("Save Current to Clipboard", "現在内容をクリップボードに保存"))
+        alert.addButton(withTitle: uiText("Save Current as File", "現在内容を別ファイルとして保存"))
+        alert.addButton(withTitle: uiText("Cancel", "キャンセル"))
+
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self else { return }
+            self.noteEditorExternalChangePromptActive = false
+
+            switch response {
+            case .alertFirstButtonReturn:
+                self.reloadFileBackedEditorFromDisk(text: diskText, fileURL: fileURL)
+            case .alertSecondButtonReturn:
+                _ = self.copyTextToClipboard(self.noteEditorDraftText, feedbackMessage: "Copied")
+                self.reloadFileBackedEditorFromDisk(text: diskText, fileURL: fileURL)
+            case .alertThirdButtonReturn:
+                if self.saveCurrentEditorTextToFile(forceSaveAs: true) {
+                    self.reloadFileBackedEditorFromDisk(text: diskText, fileURL: fileURL)
+                }
+            default:
+                break
+            }
+        }
+    }
+
+    private func reloadFileBackedEditorFromDisk(text: String, fileURL: URL) {
+        noteEditorDraftText = text
+        noteEditorLastPersistedText = text
+        noteEditorObservedFileContentSnapshot = text
+        noteEditorObservedFileModificationDate = fileModificationDate(for: fileURL)
+        noteEditorWindowController?.window?.title = externalEditorWindowTitle(
+            for: fileURL,
+            kind: currentFileBackedDocumentKind,
+            isOrphaned: false,
+            codexContext: nil
+        )
+
+        if let window = noteEditorWindowController?.window {
+            window.contentViewController = NSHostingController(
+                rootView: AnyView(
+                    StandaloneNoteEditorView(
+                        initialText: text,
+                        appDelegate: self,
+                        codexContext: nil,
+                        commitMode: currentFileBackedDocumentKind == .markdown ? .fileBackedMarkdown : .fileBackedText,
+                        initialMarkdownPreviewVisible: currentFileBackedDocumentKind?.supportsMarkdownPreview == true,
+                        onDraftChange: { [weak self] updatedText in
+                            self?.noteEditorDraftText = updatedText
+                        },
+                        onCommit: { _ in },
+                        onSave: { [weak self] in
+                            self?.saveStandaloneEditor()
+                        },
+                        onSaveAs: { [weak self] in
+                            self?.saveStandaloneEditorAs()
+                        },
+                        onClose: { [weak self] in
+                            self?.closeStandaloneNoteEditor()
+                        },
+                        onDiscardOrphanCodex: nil
+                    )
+                    .modelContainer(sharedContainer)
+                )
+            )
+        }
+    }
+
     enum ExternalEditorCloseOutcome: Equatable {
         case persistAndSignal
         case signalOnly
@@ -3228,7 +3949,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     }
 
     private func externalEditorWindowTitle(
-        for fileURL: URL,
+        for fileURL: URL?,
+        kind: FileBackedDocumentKind? = nil,
         isOrphaned: Bool,
         codexContext: CodexDraftContext?
     ) -> String {
@@ -3236,7 +3958,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             let prefix = isOrphaned ? "Codex Disconnected" : "Codex"
             return "\(prefix) • \(codexContext.projectDisplayName) • \(codexContext.shortSessionID)"
         }
-        return isOrphaned ? "Disconnected - \(fileURL.lastPathComponent)" : fileURL.lastPathComponent
+        if let fileURL {
+            return isOrphaned ? "Disconnected - \(fileURL.lastPathComponent)" : fileURL.lastPathComponent
+        }
+        switch kind {
+        case .markdown:
+            return "Untitled.md"
+        case .text, .none:
+            return "Untitled.txt"
+        }
     }
 
     static func parseCodexOpenRequest(_ requestText: String) -> CodexOpenRequest? {
@@ -3417,8 +4147,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     }
 
     @objc
+    private func newMarkdownFileFromMenu() {
+        openUntitledFileBackedEditor(kind: .markdown)
+    }
+
+    @objc
+    private func newTextFileFromMenu() {
+        openUntitledFileBackedEditor(kind: .text)
+    }
+
+    @objc
     private func createNewNoteFromMenu() {
         createNewNoteFromAnyState()
+    }
+
+    @objc
+    private func openMarkdownFileFromMenu() {
+        openTextDocumentViaPanel(preferredKind: .markdown)
+    }
+
+    @objc
+    private func openTextFileFromMenu() {
+        openTextDocumentViaPanel(preferredKind: .text)
     }
     
     @objc

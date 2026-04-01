@@ -142,6 +142,13 @@ final class EditorNSTextViewKeyboardTests: XCTestCase {
         XCTAssertTrue(html.contains("<span class=\"task-label\">done</span>"))
     }
 
+    func testMarkdownPreviewRendererDoesNotRenderImages() {
+        let html = MarkdownPreviewRenderer.documentHTML(for: "![alt](https://example.com/image.png)")
+
+        XCTAssertFalse(html.contains("<img"))
+        XCTAssertTrue(html.contains("[Image unsupported]"))
+    }
+
     func testMarkdownPreviewRendererProducesFullHTMLDocumentForWebView() {
         let html = MarkdownPreviewRenderer.documentHTML(for: "# a\n*a*")
 
@@ -219,6 +226,21 @@ final class EditorNSTextViewKeyboardTests: XCTestCase {
         editor.keyDown(with: keyEvent(keyCode: 36, characters: "\r", modifiers: .command))
 
         XCTAssertTrue(didCommit)
+    }
+
+    func testCommandSCallsSaveHandler() {
+        let editor = makeEditor(text: "draft", selection: NSRange(location: 0, length: 0))
+        var didSave = false
+        editor.onSave = {
+            didSave = true
+        }
+
+        let handled = editor.performKeyEquivalent(
+            with: keyEvent(keyCode: UInt16(kVK_ANSI_S), characters: "s", modifiers: .command)
+        )
+
+        XCTAssertTrue(handled)
+        XCTAssertTrue(didSave)
     }
 
     func testCommandOptionPCallsMarkdownPreviewHandler() {

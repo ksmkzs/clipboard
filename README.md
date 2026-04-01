@@ -24,6 +24,7 @@ ClipboardHistory solves those problems with a compact workflow.
 - [x] Automatic whitespace cleanup
 - [x] Turn multi-line text into one sentence with one command
 - [x] Simple Markdown preview
+- [x] Open `.md`, `.txt`, and readable plain-text files directly
 - [x] Copy already-normalized text in the first place
 - [x] Codex CLI integration so drafting text for the CLI feels natural
 
@@ -55,6 +56,20 @@ What you can do:
 - create a new text draft
 - open Markdown preview
 - send the current text into the frontmost app with `⌘↩`
+
+### Open and Edit Files
+
+You can open `.md`, `.txt`, or any file that can be decoded as plain text.
+
+- `.md` opens with Markdown preview support
+- no autosave
+- `⌘S` saves
+  - if the file already has a path, it saves there
+  - if no file path is assigned, it copies the current text to the clipboard
+- closing a dirty file asks whether to
+  - save to clipboard
+  - save as file
+  - cancel
 
 If Codex integration is enabled:
 
@@ -95,8 +110,8 @@ If Codex integration is enabled:
 - Outdent block: `⇧Tab`
 - Move line up / down: `⌥↑ / ⌥↓`
 - Markdown preview: `⌘⌥P`
-- Normalize selection whitespace: `⌘⇧J`
-- Join selection into one line: `⌘J`
+- Normalize selection whitespace: `⌘⇧C`
+- Join selection into one line: `⌘⌥C`
 
 ---
 
@@ -157,6 +172,15 @@ Notes:
 - Codex only receives the result when you press `⌘↩`
 - Closing the window does not send anything back to Codex
 - The orphaned state only appears when the Codex-side connection is lost unexpectedly
+
+---
+
+## Markdown Preview Scope
+
+- supports practical basics such as task lists, code blocks, links, and block quotes
+- HTML is not supported
+- images are not supported
+- links always ask for confirmation before opening in the default browser
 
 ---
 
