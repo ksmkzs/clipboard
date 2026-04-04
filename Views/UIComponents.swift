@@ -7,8 +7,8 @@
 
 import SwiftUI
 import AppKit
-import WebKit
 import Carbon
+import WebKit
 
 enum EditorCommand: String {
     case indent
@@ -19,10 +19,66 @@ enum EditorCommand: String {
     case joinLines
     case normalizeForCommand
     case trimTrailingWhitespace
+    case setText
+    case setSelectionLocation
+    case save
+    case saveAs
+    case close
+    case commit
 }
 
 extension Notification.Name {
     static let editorCommandRequested = Notification.Name("EditorCommandRequested")
+    static let editorViewValidationRequested = Notification.Name("EditorViewValidationRequested")
+}
+
+final class MarkdownPreviewValidationState {
+    static let shared = MarkdownPreviewValidationState()
+
+    var selectedText: String?
+    var scrollFraction: Double?
+    var hasHorizontalOverflow: Bool?
+    var promptVisible = false
+    var promptURL: String?
+    var lastOpenedURL: String?
+
+    private init() {}
+
+    func reset() {
+        selectedText = nil
+        scrollFraction = nil
+        hasHorizontalOverflow = nil
+        promptVisible = false
+        promptURL = nil
+        lastOpenedURL = nil
+    }
+
+    func resetPrompt() {
+        promptVisible = false
+        promptURL = nil
+    }
+
+    func respondToPrompt(open: Bool) {
+        if open, let promptURL {
+            lastOpenedURL = promptURL
+        }
+        promptVisible = false
+        promptURL = nil
+    }
+}
+
+final class PanelValidationState {
+    static let shared = PanelValidationState()
+
+    var selectionScopeRaw: String?
+    var pinnedAreaVisible: Bool?
+
+    private init() {}
+
+    func reset() {
+        selectionScopeRaw = nil
+        pinnedAreaVisible = nil
+    }
 }
 
 // MARK: - 高度な背景ぼかしビュー (NSVisualEffectViewのラッパー)
@@ -125,6 +181,10 @@ struct EventHandlingView: NSViewRepresentable {
         view.onZoomIn = onZoomIn
         view.onZoomOut = onZoomOut
         view.onResetZoom = onResetZoom
+        DispatchQueue.main.async {
+            guard let window = view.window, window.isKeyWindow, !view.isEditorActive else { return }
+            window.makeFirstResponder(view)
+        }
         return view
     }
     
@@ -167,6 +227,13 @@ struct EventHandlingView: NSViewRepresentable {
         nsView.onZoomIn = onZoomIn
         nsView.onZoomOut = onZoomOut
         nsView.onResetZoom = onResetZoom
+        DispatchQueue.main.async {
+            guard let window = nsView.window, window.isKeyWindow, !nsView.isEditorActive else { return }
+            let responder = window.firstResponder
+            if CustomKeyView.shouldReclaimPanelFirstResponder(from: responder, in: window) {
+                window.makeFirstResponder(nsView)
+            }
+        }
     }
 }
 
@@ -424,35 +491,45 @@ struct MarkdownWebPreview: NSViewRepresentable {
 
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
-        let webView = SelectableMarkdownWebView(frame: .zero, configuration: configuration)
+        let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
         webView.setValue(false, forKey: "drawsBackground")
         webView.allowsMagnification = false
         if #available(macOS 13.3, *) {
             webView.isInspectable = false
         }
-        load(markdown, scrollProgress: scrollProgress, into: webView, coordinator: context.coordinator)
+        load(markdown, fontScale: fontScale, scrollProgress: scrollProgress, scrollRequestID: scrollRequestID, into: webView, coordinator: context.coordinator)
         return webView
     }
 
     func updateNSView(_ nsView: WKWebView, context: Context) {
-        load(markdown, scrollProgress: scrollProgress, into: nsView, coordinator: context.coordinator)
+        load(markdown, fontScale: fontScale, scrollProgress: scrollProgress, scrollRequestID: scrollRequestID, into: nsView, coordinator: context.coordinator)
     }
 
-    private func load(_ markdown: String, scrollProgress: CGFloat?, into webView: WKWebView, coordinator: Coordinator) {
+    private func load(
+        _ markdown: String,
+        fontScale: CGFloat,
+        scrollProgress: CGFloat?,
+        scrollRequestID: Int,
+        into webView: WKWebView,
+        coordinator: Coordinator
+    ) {
         let html = MarkdownPreviewRenderer.documentHTML(for: markdown, fontScale: fontScale)
+        coordinator.pendingScrollProgress = scrollProgress.map { min(1, max(0, $0)) }
+        coordinator.pendingScrollRequestID = scrollRequestID
         if coordinator.lastHTML != html {
             coordinator.lastHTML = html
-            coordinator.preservedScrollProgress = coordinator.appliedScrollProgress
             webView.loadHTMLString(html, baseURL: nil)
             return
         }
+        coordinator.applyPendingScrollIfNeeded(to: webView)
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate {
         var lastHTML = ""
-        var appliedScrollProgress: CGFloat?
-        var preservedScrollProgress: CGFloat?
+        var pendingScrollProgress: CGFloat?
+        var pendingScrollRequestID: Int = .min
+        var appliedScrollRequestID: Int = .min
 
         func webView(
             _ webView: WKWebView,
@@ -461,6 +538,12 @@ struct MarkdownWebPreview: NSViewRepresentable {
         ) {
             if navigationAction.navigationType == .linkActivated,
                let url = navigationAction.request.url {
+                if ProcessInfo.processInfo.arguments.contains("--validation-hooks") {
+                    MarkdownPreviewValidationState.shared.promptVisible = true
+                    MarkdownPreviewValidationState.shared.promptURL = url.absoluteString
+                    decisionHandler(.cancel)
+                    return
+                }
                 let alert = NSAlert()
                 alert.messageText = "Open link?"
                 alert.informativeText = url.absoluteString
@@ -477,60 +560,38 @@ struct MarkdownWebPreview: NSViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            if let preservedScrollProgress {
-                applyScrollProgress(preservedScrollProgress, to: webView, force: true)
-                self.preservedScrollProgress = nil
-            }
+            applyPendingScrollIfNeeded(to: webView, force: true)
         }
 
-        func applyScrollProgress(_ progress: CGFloat?, to webView: WKWebView, force: Bool = false) {
-            let clamped = progress.map { min(1, max(0, $0)) }
-            guard force || appliedScrollProgress != clamped else { return }
-            let progressValue = Double(clamped ?? 0)
+        func applyPendingScrollIfNeeded(to webView: WKWebView, force: Bool = false) {
+            guard force || appliedScrollRequestID != pendingScrollRequestID else { return }
+            guard let progress = pendingScrollProgress else { return }
             let script = """
             (function() {
               const root = document.scrollingElement || document.documentElement || document.body;
               if (!root) { return; }
               const maxScroll = Math.max(0, root.scrollHeight - window.innerHeight);
-              root.scrollTop = maxScroll * \(progressValue);
+              root.scrollTop = maxScroll * \(Double(progress));
             })();
             """
             webView.evaluateJavaScript(script, completionHandler: nil)
-            appliedScrollProgress = clamped
-        }
-
-    }
-}
-
-final class SelectableMarkdownWebView: WKWebView {
-    override var acceptsFirstResponder: Bool {
-        true
-    }
-
-    override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        guard modifiers.contains(.command),
-              !modifiers.contains(.option),
-              !modifiers.contains(.control),
-              let key = event.charactersIgnoringModifiers?.lowercased() else {
-            return super.performKeyEquivalent(with: event)
-        }
-
-        switch key {
-        case "c":
-            NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: self)
-            return true
-        case "a":
-            NSApp.sendAction(#selector(NSResponder.selectAll(_:)), to: nil, from: self)
-            return true
-        default:
-            return super.performKeyEquivalent(with: event)
+            appliedScrollRequestID = pendingScrollRequestID
         }
     }
 }
-
 enum MarkdownPreviewRenderer {
-    private struct MarkdownListItem {
+    private struct PreparedMarkdown {
+        let lines: [String]
+        let referenceLinks: [String: String]
+        let footnotes: [(id: String, text: String)]
+    }
+
+    private struct RenderContext {
+        let referenceLinks: [String: String]
+        let footnotes: [(id: String, text: String)]
+    }
+
+    fileprivate struct MarkdownListItem {
         enum TaskState {
             case checked
             case unchecked
@@ -538,10 +599,50 @@ enum MarkdownPreviewRenderer {
 
         let text: String
         let taskState: TaskState?
+        let nestedLines: [String]
+    }
+
+    fileprivate struct ListMarker {
+        enum Kind {
+            case unordered
+            case ordered(start: Int)
+        }
+
+        let kind: Kind
+        let indent: Int
+        let contentIndent: Int
+        let text: String
+        let taskState: MarkdownListItem.TaskState?
+    }
+
+    fileprivate enum TableAlignment {
+        case leading
+        case center
+        case trailing
+        case none
+    }
+
+    private struct MatchCapture {
+        let fullMatch: String
+        let captures: [String]
+
+        init(match: NSTextCheckingResult, in text: String) {
+            self.fullMatch = Range(match.range, in: text).map { String(text[$0]) } ?? ""
+            self.captures = (1..<match.numberOfRanges).map { index in
+                Range(match.range(at: index), in: text).map { String(text[$0]) } ?? ""
+            }
+        }
+    }
+
+    private struct CodeFence {
+        let delimiter: Character
+        let count: Int
+        let info: String
     }
 
     static func documentHTML(for markdown: String, fontScale: CGFloat = 1.0) -> String {
-        let body = renderBlocks(markdown)
+        let prepared = prepare(markdown)
+        let body = renderDocumentBody(prepared)
         let baseFontSize = 13 * max(0.8, min(fontScale, 1.8))
         return """
         <!doctype html>
@@ -557,9 +658,10 @@ enum MarkdownPreviewRenderer {
         h1 { font-size: 1.8em; }
         h2 { font-size: 1.45em; }
         h3 { font-size: 1.2em; }
-        p, ul, ol, pre, blockquote { margin: 0 0 12px; }
+        p, ul, ol, pre, blockquote, table { margin: 0 0 12px; }
         ul, ol { padding-left: 1.35rem; }
         li + li { margin-top: 4px; }
+        li > ul, li > ol { margin-top: 6px; margin-bottom: 0; }
         ul.task-list { list-style: none; padding-left: 0; }
         ul.task-list li { display: flex; align-items: flex-start; gap: 0.55rem; }
         ul.task-list li input[type="checkbox"] { margin: 0.18rem 0 0; width: 0.95rem; height: 0.95rem; accent-color: rgba(157, 201, 255, 0.95); }
@@ -568,10 +670,19 @@ enum MarkdownPreviewRenderer {
         code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; background: rgba(12,18,26,0.58); color: rgba(246,247,249,0.94); padding: 1px 5px; border-radius: 4px; }
         pre { background: linear-gradient(180deg, rgba(16,23,34,0.96), rgba(11,18,29,0.96)); border: 1px solid rgba(255,255,255,0.08); box-shadow: inset 0 1px 0 rgba(255,255,255,0.04); padding: 13px 14px; border-radius: 10px; overflow-x: auto; white-space: pre; }
         pre code { display: block; white-space: pre; background: transparent; color: rgba(244,247,250,0.96); padding: 0; border-radius: 0; font-size: 0.9em; line-height: 1.65; }
+        table { width: 100%; border-collapse: collapse; border-spacing: 0; overflow: hidden; border-radius: 10px; border: 1px solid rgba(255,255,255,0.10); background: rgba(11,18,29,0.40); }
+        th, td { padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,0.08); vertical-align: top; text-align: left; }
+        th { font-weight: 700; color: rgba(255,255,255,0.96); background: rgba(255,255,255,0.04); }
+        tbody tr:last-child td { border-bottom: 0; }
+        .align-center { text-align: center; }
+        .align-right { text-align: right; }
         hr { border: 0; border-top: 1px solid rgba(255,255,255,0.12); margin: 14px 0; }
         a { color: rgba(157, 201, 255, 0.95); text-decoration: none; }
         a:hover { text-decoration: underline; }
         .muted { color: rgba(255,255,255,0.54); }
+        .footnotes { margin-top: 18px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.10); }
+        .footnotes ol { margin: 0; }
+        .footnote-ref { font-size: 0.82em; vertical-align: super; }
         </style>
         </head>
         <body>\(body.isEmpty ? "<p class=\"muted\">Nothing to preview.</p>" : body)</body>
@@ -579,160 +690,416 @@ enum MarkdownPreviewRenderer {
         """
     }
 
-    private static func renderBlocks(_ markdown: String) -> String {
+    static func attributedPreview(for markdown: String, fontScale: CGFloat = 1.0) -> NSAttributedString {
+        let html = documentHTML(for: markdown, fontScale: fontScale)
+        guard let data = html.data(using: .utf8),
+              let attributed = try? NSMutableAttributedString(
+                data: data,
+                options: [
+                    .documentType: NSAttributedString.DocumentType.html,
+                    .characterEncoding: String.Encoding.utf8.rawValue
+                ],
+                documentAttributes: nil
+              ) else {
+            return NSAttributedString(string: markdown)
+        }
+        return attributed
+    }
+
+    private static func prepare(_ markdown: String) -> PreparedMarkdown {
         let lines = markdown
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
             .components(separatedBy: "\n")
 
-        var html: [String] = []
-        var paragraphLines: [String] = []
-        var unorderedItems: [MarkdownListItem] = []
-        var orderedItems: [String] = []
-        var quoteLines: [String] = []
-        var codeLines: [String] = []
-        var codeFenceLanguage = ""
-        var inCodeBlock = false
+        var filtered: [String] = []
+        var referenceLinks: [String: String] = [:]
+        var footnotes: [(id: String, text: String)] = []
+        var index = 0
 
-        func flushParagraph() {
-            guard !paragraphLines.isEmpty else { return }
-            var content = ""
-            for index in paragraphLines.indices {
-                let rawLine = paragraphLines[index]
-                let isLast = index == paragraphLines.indices.last
-                let hasEscapedBreak = rawLine.hasSuffix("\\")
-                let trailingSpaces = trailingWhitespaceCount(in: rawLine)
-                let hasHardBreak = hasEscapedBreak || trailingSpaces >= 2
+        while index < lines.count {
+            let line = lines[index]
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
 
-                var renderedLine = rawLine
-                if hasEscapedBreak {
-                    renderedLine.removeLast()
+            if let (id, text) = footnoteDefinition(from: trimmed) {
+                var parts = [text]
+                index += 1
+                while index < lines.count {
+                    let continuation = lines[index]
+                    if continuation.hasPrefix("    ") {
+                        parts.append(String(continuation.dropFirst(4)))
+                        index += 1
+                    } else if continuation.hasPrefix("\t") {
+                        parts.append(String(continuation.dropFirst()))
+                        index += 1
+                    } else {
+                        break
+                    }
                 }
-                if hasHardBreak {
-                    renderedLine = String(renderedLine.dropLast(min(2, trailingSpaces)))
-                }
-                renderedLine = renderedLine.trimmingCharacters(in: .whitespaces)
-                content.append(renderInline(renderedLine))
-                if !isLast {
-                    content.append(hasHardBreak ? "<br>" : " ")
-                }
+                footnotes.append((id: id, text: parts.joined(separator: "\n")))
+                continue
             }
-            html.append("<p>\(content)</p>")
-            paragraphLines.removeAll(keepingCapacity: true)
+
+            if let (label, url) = referenceDefinition(from: trimmed) {
+                referenceLinks[label.lowercased()] = url
+                index += 1
+                continue
+            }
+
+            filtered.append(line)
+            index += 1
         }
 
-        func flushUnorderedList() {
-            guard !unorderedItems.isEmpty else { return }
-            let isTaskList = unorderedItems.allSatisfy { $0.taskState != nil }
-            let content = unorderedItems.map { item -> String in
-                if let taskState = item.taskState {
-                    let checkedAttribute = taskState == .checked ? " checked" : ""
-                    return "<li><input type=\"checkbox\" disabled\(checkedAttribute)><span class=\"task-label\">\(renderInline(item.text))</span></li>"
-                }
-                return "<li>\(renderInline(item.text))</li>"
+        return PreparedMarkdown(lines: filtered, referenceLinks: referenceLinks, footnotes: footnotes)
+    }
+
+    private static func renderDocumentBody(_ prepared: PreparedMarkdown) -> String {
+        let context = RenderContext(referenceLinks: prepared.referenceLinks, footnotes: prepared.footnotes)
+        var body = renderBlocks(prepared.lines, context: context)
+        if !prepared.footnotes.isEmpty {
+            let items = prepared.footnotes.map { footnote in
+                "<li id=\"fn-\(escapeAttribute(footnote.id))\">\(renderBlocks(footnote.text.components(separatedBy: "\n"), context: context))</li>"
             }.joined()
-            let classAttribute = isTaskList ? " class=\"task-list\"" : ""
-            html.append("<ul\(classAttribute)>\(content)</ul>")
-            unorderedItems.removeAll(keepingCapacity: true)
+            body.append("\n<div class=\"footnotes\"><ol>\(items)</ol></div>")
         }
+        return body
+    }
 
-        func flushOrderedList() {
-            guard !orderedItems.isEmpty else { return }
-            let content = orderedItems.map { "<li>\(renderInline($0))</li>" }.joined()
-            html.append("<ol>\(content)</ol>")
-            orderedItems.removeAll(keepingCapacity: true)
-        }
+    private static func renderBlocks(_ lines: [String], context: RenderContext) -> String {
+        var html: [String] = []
+        var index = 0
 
-        func flushQuote() {
-            guard !quoteLines.isEmpty else { return }
-            let content = quoteLines.map { renderInline($0) }.joined(separator: "<br>")
-            html.append("<blockquote><p>\(content)</p></blockquote>")
-            quoteLines.removeAll(keepingCapacity: true)
-        }
-
-        func flushCodeBlock() {
-            guard inCodeBlock else { return }
-            let languageClass = codeFenceLanguage.isEmpty ? "" : " class=\"language-\(escapeAttribute(codeFenceLanguage))\""
-            let content = escapeHTML(codeLines.joined(separator: "\n"))
-            html.append("<pre><code\(languageClass)>\(content)</code></pre>")
-            codeLines.removeAll(keepingCapacity: true)
-            codeFenceLanguage = ""
-            inCodeBlock = false
-        }
-
-        func flushAllTextBlocks() {
-            flushParagraph()
-            flushUnorderedList()
-            flushOrderedList()
-            flushQuote()
-        }
-
-        for rawLine in lines {
+        while index < lines.count {
+            let rawLine = lines[index]
             let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
 
-            if inCodeBlock {
-                if trimmed.hasPrefix("```") {
-                    flushCodeBlock()
-                } else {
-                    codeLines.append(rawLine)
-                }
-                continue
-            }
-
-            if trimmed.hasPrefix("```") {
-                flushAllTextBlocks()
-                inCodeBlock = true
-                codeFenceLanguage = String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces)
-                continue
-            }
-
             if trimmed.isEmpty {
-                flushAllTextBlocks()
+                index += 1
+                continue
+            }
+
+            if let fence = codeFenceOpener(from: trimmed) {
+                let language = fence.info
+                index += 1
+                var codeLines: [String] = []
+                while index < lines.count {
+                    let codeLine = lines[index]
+                    if isCodeFenceCloser(
+                        trimmed: codeLine.trimmingCharacters(in: .whitespaces),
+                        matching: fence
+                    ) {
+                        index += 1
+                        break
+                    }
+                    codeLines.append(codeLine)
+                    index += 1
+                }
+                let languageClass = language.isEmpty ? "" : " class=\"language-\(escapeAttribute(language))\""
+                html.append("<pre><code\(languageClass)>\(escapeHTML(codeLines.joined(separator: "\n")))</code></pre>")
                 continue
             }
 
             if let heading = heading(trimmed) {
-                flushAllTextBlocks()
-                html.append("<h\(heading.level)>\(renderInline(heading.text))</h\(heading.level)>")
+                html.append("<h\(heading.level)>\(renderInline(heading.text, context: context))</h\(heading.level)>")
+                index += 1
                 continue
             }
 
-            if trimmed == "---" || trimmed == "***" || trimmed == "___" {
-                flushAllTextBlocks()
+            if isHorizontalRule(trimmed) {
                 html.append("<hr>")
+                index += 1
                 continue
             }
 
-            if let quote = blockquoteLine(trimmed) {
-                flushParagraph()
-                flushUnorderedList()
-                flushOrderedList()
-                quoteLines.append(quote)
+            if canStartTable(lines: lines, at: index) {
+                let (tableHTML, nextIndex) = renderTable(lines: lines, start: index, context: context)
+                html.append(tableHTML)
+                index = nextIndex
                 continue
             }
 
-            if let unordered = unorderedListLine(trimmed) {
-                flushParagraph()
-                flushOrderedList()
-                flushQuote()
-                unorderedItems.append(unordered)
+            if isBlockquoteLine(rawLine) {
+                let (quoteHTML, nextIndex) = renderBlockquote(lines: lines, start: index, context: context)
+                html.append(quoteHTML)
+                index = nextIndex
                 continue
             }
 
-            if let ordered = orderedListLine(trimmed) {
-                flushParagraph()
-                flushUnorderedList()
-                flushQuote()
-                orderedItems.append(ordered)
+            if let marker = parseListMarker(from: rawLine) {
+                let (listHTML, nextIndex) = renderList(lines: lines, start: index, marker: marker, context: context)
+                html.append(listHTML)
+                index = nextIndex
                 continue
             }
 
-            paragraphLines.append(rawLine)
+            let (paragraphHTML, nextIndex) = renderParagraph(lines: lines, start: index, context: context)
+            html.append(paragraphHTML)
+            index = nextIndex
         }
 
-        flushCodeBlock()
-        flushAllTextBlocks()
         return html.joined(separator: "\n")
+    }
+
+    private static func renderParagraph(lines: [String], start: Int, context: RenderContext) -> (String, Int) {
+        var paragraphLines: [String] = []
+        var index = start
+
+        while index < lines.count {
+            let rawLine = lines[index]
+            let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || trimmed.hasPrefix("```") || heading(trimmed) != nil || isHorizontalRule(trimmed) || isBlockquoteLine(rawLine) || parseListMarker(from: rawLine) != nil || canStartTable(lines: lines, at: index) {
+                break
+            }
+            paragraphLines.append(rawLine)
+            index += 1
+        }
+
+        var content = ""
+        for position in paragraphLines.indices {
+            let rawLine = paragraphLines[position]
+            let isLast = position == paragraphLines.indices.last
+            let hasEscapedBreak = rawLine.hasSuffix("\\")
+            let trailingSpaces = trailingWhitespaceCount(in: rawLine)
+            let hasHardBreak = hasEscapedBreak || trailingSpaces >= 2
+
+            var renderedLine = rawLine
+            if hasEscapedBreak {
+                renderedLine.removeLast()
+            }
+            if hasHardBreak {
+                renderedLine = String(renderedLine.dropLast(min(2, trailingSpaces)))
+            }
+            renderedLine = renderedLine.trimmingCharacters(in: .whitespaces)
+            content.append(renderInline(renderedLine, context: context))
+            if !isLast {
+                content.append(hasHardBreak ? "<br>" : " ")
+            }
+        }
+
+        return ("<p>\(content)</p>", index)
+    }
+
+    private static func renderBlockquote(lines: [String], start: Int, context: RenderContext) -> (String, Int) {
+        var quoteLines: [String] = []
+        var index = start
+
+        while index < lines.count, isBlockquoteLine(lines[index]) {
+            var stripped = lines[index].trimmingCharacters(in: .whitespaces)
+            stripped.removeFirst()
+            if stripped.first == " " {
+                stripped.removeFirst()
+            }
+            quoteLines.append(stripped)
+            index += 1
+        }
+
+        return ("<blockquote>\(renderBlocks(quoteLines, context: context))</blockquote>", index)
+    }
+
+    private static func renderList(
+        lines: [String],
+        start: Int,
+        marker firstMarker: ListMarker,
+        context: RenderContext
+    ) -> (String, Int) {
+        var items: [MarkdownListItem] = []
+        var index = start
+        let isOrdered = firstMarker.kind.isOrdered
+        let listStartNumber = firstMarker.kind.startNumber
+
+        while index < lines.count {
+            guard let marker = parseListMarker(from: lines[index]),
+                  marker.indent == firstMarker.indent,
+                  marker.kind.isOrdered == isOrdered else {
+                break
+            }
+
+            index += 1
+            var nestedLines: [String] = []
+            while index < lines.count {
+                let nextLine = lines[index]
+                let nextTrimmed = nextLine.trimmingCharacters(in: .whitespaces)
+
+                if nextTrimmed.isEmpty {
+                    nestedLines.append("")
+                    index += 1
+                    continue
+                }
+
+                if let sibling = parseListMarker(from: nextLine) {
+                    if sibling.indent == firstMarker.indent && sibling.kind.isOrdered == isOrdered {
+                        break
+                    }
+                    if sibling.indent == firstMarker.indent {
+                        break
+                    }
+                    if sibling.indent < firstMarker.indent {
+                        break
+                    }
+                } else if leadingWhitespaceCount(in: nextLine) <= firstMarker.indent {
+                    break
+                }
+
+                nestedLines.append(strippingLeadingWhitespace(from: nextLine, count: marker.contentIndent))
+                index += 1
+            }
+
+            items.append(MarkdownListItem(text: marker.text, taskState: marker.taskState, nestedLines: nestedLines))
+        }
+
+        let listTag = isOrdered ? "ol" : "ul"
+        var attributes = ""
+        if isOrdered, let listStartNumber, listStartNumber != 1 {
+            attributes.append(" start=\"\(listStartNumber)\"")
+        }
+        if !items.isEmpty && items.allSatisfy({ $0.taskState != nil }) {
+            attributes.append(" class=\"task-list\"")
+        }
+
+        let content = items.map { item -> String in
+            let nestedHTML = item.nestedLines.isEmpty ? "" : renderBlocks(item.nestedLines, context: context)
+            if let taskState = item.taskState {
+                let checkedAttribute = taskState == .checked ? " checked" : ""
+                let labelHTML = item.text.isEmpty ? "" : renderInline(item.text, context: context)
+                let labelContent = [labelHTML, nestedHTML].filter { !$0.isEmpty }.joined()
+                return "<li><input type=\"checkbox\" disabled\(checkedAttribute)><span class=\"task-label\">\(labelContent)</span></li>"
+            }
+
+            if nestedHTML.isEmpty {
+                return "<li>\(renderInline(item.text, context: context))</li>"
+            }
+
+            let lead = item.text.isEmpty ? "" : "<div>\(renderInline(item.text, context: context))</div>"
+            return "<li>\(lead)\(nestedHTML)</li>"
+        }.joined()
+
+        return ("<\(listTag)\(attributes)>\(content)</\(listTag)>", index)
+    }
+
+    private static func renderTable(lines: [String], start: Int, context: RenderContext) -> (String, Int) {
+        let headerCells = tableCells(from: lines[start])
+        let alignments = tableAlignments(from: lines[start + 1])
+        var index = start + 2
+        var rows: [[String]] = []
+
+        while index < lines.count {
+            let trimmed = lines[index].trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || !trimmed.contains("|") {
+                break
+            }
+            rows.append(tableCells(from: lines[index]))
+            index += 1
+        }
+
+        let headerHTML = zipLongest(headerCells, alignments).map { cell, alignment in
+            "<th\(alignment.cssClassAttribute)>\(renderInline(cell, context: context))</th>"
+        }.joined()
+        let bodyHTML = rows.map { row in
+            let rowHTML = zipLongest(row, alignments).map { cell, alignment in
+                "<td\(alignment.cssClassAttribute)>\(renderInline(cell, context: context))</td>"
+            }.joined()
+            return "<tr>\(rowHTML)</tr>"
+        }.joined()
+
+        return ("<table><thead><tr>\(headerHTML)</tr></thead><tbody>\(bodyHTML)</tbody></table>", index)
+    }
+
+    private static func renderInline(_ text: String, context: RenderContext) -> String {
+        var placeholders: [String: String] = [:]
+        var placeholderCounter = 0
+
+        func reserve(_ html: String) -> String {
+            let token = "\u{7}MD\(placeholderCounter)\u{7}"
+            placeholderCounter += 1
+            placeholders[token] = html
+            return token
+        }
+
+        var protectedText = protectEscapes(in: text, reserve: reserve)
+        protectedText = protectCodeSpans(in: protectedText, reserve: reserve)
+
+        var html = escapeHTML(protectedText)
+        html = replacingMatches(in: html, pattern: #"!\[([^\]]*)\]\(([^)\s]+)\)"#) { _ in
+            #"<span class="muted">[Image unsupported]</span>"#
+        }
+        html = replacingMatches(in: html, pattern: #"!\[([^\]]*)\]\[([^\]]+)\]"#) { _ in
+            #"<span class="muted">[Image unsupported]</span>"#
+        }
+        html = replacingMatches(in: html, pattern: #"&lt;(https?://[^&<>]+)&gt;"#) { match in
+            let url = match.captures[0]
+            return #"<a href="\#(url)">\#(url)</a>"#
+        }
+        html = replacingMatches(in: html, pattern: #"\[([^\]]+)\]\(([^)\s]+)\)"#) { match in
+            #"<a href="\#(match.captures[1])">\#(match.captures[0])</a>"#
+        }
+        html = replacingMatches(in: html, pattern: #"\[([^\]]+)\]\[([^\]]+)\]"#) { match in
+            let label = match.captures[1].lowercased()
+            guard let url = context.referenceLinks[label] else { return match.fullMatch }
+            return #"<a href="\#(escapeAttribute(url))">\#(match.captures[0])</a>"#
+        }
+        html = replacingMatches(in: html, pattern: #"\[([^\]]+)\]\[\]"#) { match in
+            let label = match.captures[0].lowercased()
+            guard let url = context.referenceLinks[label] else { return match.fullMatch }
+            return #"<a href="\#(escapeAttribute(url))">\#(match.captures[0])</a>"#
+        }
+        html = replacingMatches(in: html, pattern: #"\[\^([^\]]+)\]"#) { match in
+            let id = match.captures[0]
+            if context.footnotes.contains(where: { $0.id == id }) {
+                return "<sup class=\"footnote-ref\"><a href=\"#fn-\(escapeAttribute(id))\">[\(escapeHTML(id))]</a></sup>"
+            }
+            return "<sup class=\"footnote-ref\">[\(escapeHTML(id))]</sup>"
+        }
+        html = replacingMatches(in: html, pattern: #"\*\*\*([^*]+)\*\*\*"#) { match in
+            #"<strong><em>\#(match.captures[0])</em></strong>"#
+        }
+        html = replacingMatches(in: html, pattern: #"___([^_]+)___"#) { match in
+            #"<strong><em>\#(match.captures[0])</em></strong>"#
+        }
+        html = replacingMatches(in: html, pattern: #"\*\*([^*]+)\*\*"#) { match in
+            #"<strong>\#(match.captures[0])</strong>"#
+        }
+        html = replacingMatches(in: html, pattern: #"__([^_]+)__"#) { match in
+            #"<strong>\#(match.captures[0])</strong>"#
+        }
+        html = replacingMatches(in: html, pattern: #"\*([^*\n]+)\*"#) { match in
+            #"<em>\#(match.captures[0])</em>"#
+        }
+        html = replacingMatches(in: html, pattern: #"_([^_\n]+)_"#) { match in
+            #"<em>\#(match.captures[0])</em>"#
+        }
+        html = replacingMatches(in: html, pattern: #"~~([^~]+)~~"#) { match in
+            #"<del>\#(match.captures[0])</del>"#
+        }
+
+        for (token, replacement) in placeholders {
+            html = html.replacingOccurrences(of: token, with: replacement)
+        }
+        return html
+    }
+
+    private static func referenceDefinition(from line: String) -> (String, String)? {
+        guard let match = firstMatch(in: line, pattern: #"^\[([^\]]+)\]:\s+(\S+)\s*$"#) else { return nil }
+        return (match.captures[0].trimmingCharacters(in: .whitespaces), match.captures[1].trimmingCharacters(in: .whitespaces))
+    }
+
+    private static func footnoteDefinition(from line: String) -> (String, String)? {
+        guard let match = firstMatch(in: line, pattern: #"^\[\^([^\]]+)\]:\s*(.+)$"#) else { return nil }
+        return (match.captures[0], match.captures[1])
+    }
+
+    private static func codeFenceOpener(from line: String) -> CodeFence? {
+        guard let delimiter = line.first, delimiter == "`" || delimiter == "~" else { return nil }
+        let count = line.prefix { $0 == delimiter }.count
+        guard count >= 3 else { return nil }
+        let info = String(line.dropFirst(count)).trimmingCharacters(in: .whitespaces)
+        return CodeFence(delimiter: delimiter, count: count, info: info)
+    }
+
+    private static func isCodeFenceCloser(trimmed line: String, matching fence: CodeFence) -> Bool {
+        guard line.first == fence.delimiter else { return false }
+        let count = line.prefix { $0 == fence.delimiter }.count
+        guard count >= fence.count else { return false }
+        return line.dropFirst(count).trimmingCharacters(in: .whitespaces).isEmpty
     }
 
     private static func heading(_ line: String) -> (level: Int, text: String)? {
@@ -744,82 +1111,239 @@ enum MarkdownPreviewRenderer {
         return (level, String(remainder.dropFirst()).trimmingCharacters(in: .whitespaces))
     }
 
-    private static func unorderedListLine(_ line: String) -> MarkdownListItem? {
-        guard line.count >= 2 else { return nil }
-        let marker = line.first!
-        guard marker == "-" || marker == "*" || marker == "+" else { return nil }
-        guard line.dropFirst().first == " " else { return nil }
-        let content = String(line.dropFirst(2))
-        if content.hasPrefix("[ ] ") {
-            return MarkdownListItem(text: String(content.dropFirst(4)), taskState: .unchecked)
-        }
-        if content.lowercased().hasPrefix("[x] ") {
-            return MarkdownListItem(text: String(content.dropFirst(4)), taskState: .checked)
-        }
-        return MarkdownListItem(text: content, taskState: nil)
+    private static func isHorizontalRule(_ line: String) -> Bool {
+        line == "---" || line == "***" || line == "___"
     }
 
-    private static func orderedListLine(_ line: String) -> String? {
-        var digits = ""
-        var index = line.startIndex
-        while index < line.endIndex, line[index].isNumber {
-            digits.append(line[index])
-            index = line.index(after: index)
+    private static func canStartTable(lines: [String], at index: Int) -> Bool {
+        guard index + 1 < lines.count else { return false }
+        let header = lines[index].trimmingCharacters(in: .whitespaces)
+        let separator = lines[index + 1].trimmingCharacters(in: .whitespaces)
+        return header.contains("|") && isTableSeparatorLine(separator)
+    }
+
+    private static func isTableSeparatorLine(_ line: String) -> Bool {
+        guard line.contains("|") else { return false }
+        let cells = tableCells(from: line)
+        guard !cells.isEmpty else { return false }
+        return cells.allSatisfy { cell in
+            let trimmed = cell.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty else { return false }
+            let core = trimmed.replacingOccurrences(of: ":", with: "")
+            return core.count >= 3 && core.allSatisfy { $0 == "-" }
         }
-        guard !digits.isEmpty, index < line.endIndex, line[index] == "." else { return nil }
-        index = line.index(after: index)
-        guard index < line.endIndex, line[index] == " " else { return nil }
-        return String(line[line.index(after: index)...])
     }
 
-    private static func blockquoteLine(_ line: String) -> String? {
-        guard line.hasPrefix(">") else { return nil }
-        return String(line.dropFirst()).trimmingCharacters(in: .whitespaces)
+    private static func tableCells(from line: String) -> [String] {
+        var trimmed = line.trimmingCharacters(in: .whitespaces)
+        if trimmed.hasPrefix("|") {
+            trimmed.removeFirst()
+        }
+        if trimmed.hasSuffix("|") {
+            trimmed.removeLast()
+        }
+        var cells: [String] = []
+        var currentCell = ""
+        var index = trimmed.startIndex
+        var activeCodeSpanFenceLength: Int?
+
+        while index < trimmed.endIndex {
+            let character = trimmed[index]
+
+            if character == "\\" {
+                let nextIndex = trimmed.index(after: index)
+                if nextIndex < trimmed.endIndex {
+                    currentCell.append(character)
+                    currentCell.append(trimmed[nextIndex])
+                    index = trimmed.index(after: nextIndex)
+                    continue
+                }
+            }
+
+            if character == "`" {
+                let runStart = index
+                var runLength = 0
+                while index < trimmed.endIndex, trimmed[index] == "`" {
+                    runLength += 1
+                    index = trimmed.index(after: index)
+                }
+                currentCell.append(contentsOf: trimmed[runStart..<index])
+
+                if let currentFenceLength = activeCodeSpanFenceLength {
+                    if runLength == currentFenceLength {
+                        activeCodeSpanFenceLength = nil
+                    }
+                } else {
+                    activeCodeSpanFenceLength = runLength
+                }
+                continue
+            }
+
+            if character == "|", activeCodeSpanFenceLength == nil {
+                cells.append(currentCell.trimmingCharacters(in: .whitespaces))
+                currentCell = ""
+                index = trimmed.index(after: index)
+                continue
+            }
+
+            currentCell.append(character)
+            index = trimmed.index(after: index)
+        }
+
+        cells.append(currentCell.trimmingCharacters(in: .whitespaces))
+        return cells
     }
 
-    private static func renderInline(_ text: String) -> String {
-        let codePattern = try? NSRegularExpression(pattern: "`([^`]+)`")
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        var codeSegments: [String] = []
-        var withPlaceholders = text
-
-        if let codePattern {
-            let matches = codePattern.matches(in: text, range: range).reversed()
-            for match in matches {
-                guard match.numberOfRanges == 2,
-                      let contentRange = Range(match.range(at: 1), in: text),
-                      let matchRange = Range(match.range, in: withPlaceholders) else { continue }
-                let placeholder = "\u{0}CODE\(codeSegments.count)\u{0}"
-                codeSegments.append("<code>\(escapeHTML(String(text[contentRange])))</code>")
-                withPlaceholders.replaceSubrange(matchRange, with: placeholder)
+    private static func tableAlignments(from separatorLine: String) -> [TableAlignment] {
+        tableCells(from: separatorLine).map { cell in
+            let trimmed = cell.trimmingCharacters(in: .whitespaces)
+            let leading = trimmed.hasPrefix(":")
+            let trailing = trimmed.hasSuffix(":")
+            switch (leading, trailing) {
+            case (true, true): return .center
+            case (false, true): return .trailing
+            case (true, false): return .leading
+            default: return .none
             }
         }
-
-        var html = escapeHTML(withPlaceholders)
-        html = replace(
-            html,
-            pattern: #"!\[([^\]]*)\]\(([^)\s]+)\)"#,
-            template: #"<span class="muted">[Image unsupported]</span>"#
-        )
-        html = replace(html, pattern: #"\[([^\]]+)\]\(([^)\s]+)\)"#, template: #"<a href="$2">$1</a>"#)
-        html = replace(html, pattern: #"\*\*([^*]+)\*\*"#, template: #"<strong>$1</strong>"#)
-        html = replace(html, pattern: #"__([^_]+)__"#, template: #"<strong>$1</strong>"#)
-        html = replace(html, pattern: #"\*([^*\n]+)\*"#, template: #"<em>$1</em>"#)
-        html = replace(html, pattern: #"_([^_\n]+)_"#, template: #"<em>$1</em>"#)
-        html = replace(html, pattern: #"~~([^~]+)~~"#, template: #"<del>$1</del>"#)
-
-        for (index, codeHTML) in codeSegments.enumerated() {
-            html = html.replacingOccurrences(of: "\u{0}CODE\(index)\u{0}", with: codeHTML)
-        }
-        return html
     }
 
-    private static func replace(_ text: String, pattern: String, template: String) -> String {
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
+    private static func isBlockquoteLine(_ line: String) -> Bool {
+        line.trimmingCharacters(in: .whitespaces).hasPrefix(">")
+    }
+
+    private static func parseListMarker(from line: String) -> ListMarker? {
+        let indent = leadingWhitespaceCount(in: line)
+        let stripped = String(line.dropFirst(indent))
+        guard !stripped.isEmpty else { return nil }
+
+        if let marker = stripped.first, marker == "-" || marker == "*" || marker == "+" {
+            guard stripped.dropFirst().first == " " else { return nil }
+            let content = String(stripped.dropFirst(2))
+            let taskState: MarkdownListItem.TaskState?
+            let text: String
+            if content.hasPrefix("[ ] ") {
+                taskState = .unchecked
+                text = String(content.dropFirst(4))
+            } else if content.lowercased().hasPrefix("[x] ") {
+                taskState = .checked
+                text = String(content.dropFirst(4))
+            } else {
+                taskState = nil
+                text = content
+            }
+            return ListMarker(
+                kind: .unordered,
+                indent: indent,
+                contentIndent: indent + 2,
+                text: text,
+                taskState: taskState
+            )
+        }
+
+        var digits = ""
+        var currentIndex = stripped.startIndex
+        while currentIndex < stripped.endIndex, stripped[currentIndex].isNumber {
+            digits.append(stripped[currentIndex])
+            currentIndex = stripped.index(after: currentIndex)
+        }
+        guard !digits.isEmpty, currentIndex < stripped.endIndex, stripped[currentIndex] == "." else { return nil }
+        currentIndex = stripped.index(after: currentIndex)
+        guard currentIndex < stripped.endIndex, stripped[currentIndex] == " " else { return nil }
+        let contentStart = stripped.index(after: currentIndex)
+        return ListMarker(
+            kind: .ordered(start: Int(digits) ?? 1),
+            indent: indent,
+            contentIndent: indent + digits.count + 2,
+            text: String(stripped[contentStart...]),
+            taskState: nil
+        )
+    }
+
+    private static func protectEscapes(in text: String, reserve: (String) -> String) -> String {
+        let escapable = Set("\\`*_{}[]()#+-.!>|")
+        var result = ""
+        var index = text.startIndex
+        while index < text.endIndex {
+            let character = text[index]
+            let nextIndex = text.index(after: index)
+            if character == "\\", nextIndex < text.endIndex {
+                let nextCharacter = text[nextIndex]
+                if escapable.contains(nextCharacter) {
+                    result.append(contentsOf: reserve(escapeHTML(String(nextCharacter))))
+                    index = text.index(after: nextIndex)
+                    continue
+                }
+            }
+            result.append(character)
+            index = nextIndex
+        }
+        return result
+    }
+
+    private static func protectCodeSpans(in text: String, reserve: (String) -> String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: "`([^`]+)`") else {
             return text
         }
+        var working = text
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        return regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: template)
+        for match in regex.matches(in: text, range: range).reversed() {
+            guard match.numberOfRanges == 2,
+                  let contentRange = Range(match.range(at: 1), in: text),
+                  let matchRange = Range(match.range, in: working) else { continue }
+            let placeholder = reserve("<code>\(escapeHTML(String(text[contentRange])))</code>")
+            working.replaceSubrange(matchRange, with: placeholder)
+        }
+        return working
+    }
+
+    private static func replacingMatches(
+        in text: String,
+        pattern: String,
+        transform: (MatchCapture) -> String
+    ) -> String {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
+        var result = text
+        let matches = regex.matches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text)).reversed()
+        for match in matches {
+            guard let range = Range(match.range, in: result) else { continue }
+            let capture = MatchCapture(match: match, in: result)
+            result.replaceSubrange(range, with: transform(capture))
+        }
+        return result
+    }
+
+    private static func firstMatch(in text: String, pattern: String) -> MatchCapture? {
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text)) else {
+            return nil
+        }
+        return MatchCapture(match: match, in: text)
+    }
+
+    private static func zipLongest(_ cells: [String], _ alignments: [TableAlignment]) -> [(String, TableAlignment)] {
+        let count = max(cells.count, alignments.count)
+        return (0..<count).map { index in
+            let cell = index < cells.count ? cells[index] : ""
+            let alignment = index < alignments.count ? alignments[index] : .none
+            return (cell, alignment)
+        }
+    }
+
+    private static func leadingWhitespaceCount(in text: String) -> Int {
+        text.prefix { $0 == " " || $0 == "\t" }.count
+    }
+
+    private static func strippingLeadingWhitespace(from text: String, count: Int) -> String {
+        var remaining = count
+        var index = text.startIndex
+        while index < text.endIndex, remaining > 0 {
+            let character = text[index]
+            guard character == " " || character == "\t" else { break }
+            remaining -= 1
+            index = text.index(after: index)
+        }
+        return String(text[index...])
     }
 
     private static func escapeHTML(_ text: String) -> String {
@@ -837,6 +1361,35 @@ enum MarkdownPreviewRenderer {
 
     private static func trailingWhitespaceCount(in text: String) -> Int {
         text.reversed().prefix { $0 == " " || $0 == "\t" }.count
+    }
+}
+
+private extension MarkdownPreviewRenderer.ListMarker.Kind {
+    var isOrdered: Bool {
+        if case .ordered = self {
+            return true
+        }
+        return false
+    }
+
+    var startNumber: Int? {
+        if case let .ordered(start) = self {
+            return start
+        }
+        return nil
+    }
+}
+
+private extension MarkdownPreviewRenderer.TableAlignment {
+    var cssClassAttribute: String {
+        switch self {
+        case .leading, .none:
+            return ""
+        case .center:
+            return " class=\"align-center\""
+        case .trailing:
+            return " class=\"align-right\""
+        }
     }
 }
 
@@ -885,7 +1438,12 @@ final class EditorNSTextView: NSTextView {
                 guard let self,
                       let rawValue = notification.userInfo?["command"] as? String,
                       let command = EditorCommand(rawValue: rawValue) else { return }
-                self.applyEditorCommand(command)
+                if let targetWindowNumber = notification.userInfo?["targetWindowNumber"] as? Int,
+                   self.window?.windowNumber != targetWindowNumber {
+                    return
+                }
+                let payloadText = notification.userInfo?["text"] as? String
+                self.applyEditorCommand(command, payloadText: payloadText)
             }
         }
     }
@@ -921,38 +1479,6 @@ final class EditorNSTextView: NSTextView {
             return
         }
 
-        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if modifiers.contains(.command) && !modifiers.contains(.option) && !modifiers.contains(.control) {
-            switch event.keyCode {
-            case 123:
-                moveToBeginningOfLine(nil)
-                return
-            case 124:
-                moveToEndOfLine(nil)
-                return
-            case 51:
-                deleteToBeginningOfLine(nil)
-                return
-            default:
-                break
-            }
-        }
-
-        if modifiers.contains(.option) && !modifiers.contains(.command) && !modifiers.contains(.control) {
-            switch event.keyCode {
-            case 123:
-                moveWordLeft(nil)
-                return
-            case 124:
-                moveWordRight(nil)
-                return
-            case 51:
-                deleteWordBackward(nil)
-                return
-            default:
-                break
-            }
-        }
         super.keyDown(with: event)
     }
 
@@ -980,17 +1506,26 @@ final class EditorNSTextView: NSTextView {
             return super.performKeyEquivalent(with: event)
         }
 
-        if key == "z" {
-            if modifiers.contains(.shift) {
-                if let undoManager, undoManager.canRedo {
-                    undoManager.redo()
-                    return true
-                }
-            } else if let undoManager, undoManager.canUndo {
-                undoManager.undo()
+        if modifiers == [.command] {
+            switch key {
+            case "a":
+                selectAll(nil)
                 return true
+            case "c":
+                copy(nil)
+                return true
+            case "x":
+                cut(nil)
+                return true
+            case "v":
+                paste(nil)
+                return true
+            default:
+                break
             }
-        } else if key == "s", modifiers.contains(.shift), !modifiers.contains(.option), !modifiers.contains(.control) {
+        }
+
+        if key == "s", modifiers.contains(.shift), !modifiers.contains(.option), !modifiers.contains(.control) {
             onSaveAs?()
             return true
         } else if key == "s", !modifiers.contains(.shift), !modifiers.contains(.option), !modifiers.contains(.control) {
@@ -1008,18 +1543,6 @@ final class EditorNSTextView: NSTextView {
         } else if onDiscardOrphanCodex != nil, HotKeyManager.event(event, matches: orphanCodexDiscardShortcut) {
             onDiscardOrphanCodex?()
             return true
-        } else if key == "a", !modifiers.contains(.shift), !modifiers.contains(.option), !modifiers.contains(.control) {
-            selectAll(nil)
-            return true
-        } else if key == "c", !modifiers.contains(.shift), !modifiers.contains(.option), !modifiers.contains(.control) {
-            copy(nil)
-            return true
-        } else if key == "x", !modifiers.contains(.shift), !modifiers.contains(.option), !modifiers.contains(.control) {
-            cut(nil)
-            return true
-        } else if key == "v", !modifiers.contains(.shift), !modifiers.contains(.option), !modifiers.contains(.control) {
-            paste(nil)
-            return true
         } else if key == "t", modifiers.contains(.option) {
             applyEditorCommand(.trimTrailingWhitespace)
             return true
@@ -1028,7 +1551,7 @@ final class EditorNSTextView: NSTextView {
         return super.performKeyEquivalent(with: event)
     }
 
-    private func applyEditorCommand(_ command: EditorCommand) {
+    private func applyEditorCommand(_ command: EditorCommand, payloadText: String? = nil) {
         switch command {
         case .indent:
             indentSelectedLines()
@@ -1056,7 +1579,28 @@ final class EditorNSTextView: NSTextView {
                     options: .regularExpression
                 )
             }
+        case .setText:
+            replaceAllText(payloadText ?? "")
+        case .setSelectionLocation:
+            let location = Int(payloadText ?? "") ?? 0
+            let clamped = max(0, min(location, (string as NSString).length))
+            setSelectedRange(NSRange(location: clamped, length: 0))
+        case .save:
+            onSave?()
+        case .saveAs:
+            onSaveAs?()
+        case .close:
+            onEscape?()
+        case .commit:
+            onCommit?()
         }
+    }
+
+    private func replaceAllText(_ newText: String) {
+        guard string != newText else { return }
+        replaceCharacters(in: NSRange(location: 0, length: (string as NSString).length), with: newText)
+        didChangeText()
+        setSelectedRange(NSRange(location: (newText as NSString).length, length: 0))
     }
 
     private func indentSelectedLines() {
@@ -1430,47 +1974,20 @@ class CustomKeyView: NSView {
     var onZoomIn: (() -> Void)?
     var onZoomOut: (() -> Void)?
     var onResetZoom: (() -> Void)?
-    private var localKeyMonitor: Any?
     
-    // このViewがキーイベントを受け取れるようにする
     override var acceptsFirstResponder: Bool {
         return true
     }
-    
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        installLocalKeyMonitorIfNeeded()
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self, let window = self.window else { return }
-            window.makeFirstResponder(self)
+
+    static func shouldReclaimPanelFirstResponder(from responder: NSResponder?, in window: NSWindow) -> Bool {
+        guard let responder else { return true }
+        if responder === window || responder === window.contentView {
+            return true
         }
-    }
-
-    deinit {
-        if let localKeyMonitor {
-            NSEvent.removeMonitor(localKeyMonitor)
+        if let textView = responder as? NSTextView {
+            return !textView.isEditable
         }
-    }
-
-    private func installLocalKeyMonitorIfNeeded() {
-        guard localKeyMonitor == nil else { return }
-        localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self,
-                  let window = self.window,
-                  window.isKeyWindow,
-                  NSApp.isActive else {
-                return event
-            }
-
-            if self.isEditorActive {
-                return event
-            }
-
-            if self.handlePanelKeyDown(event) || self.handlePanelKeyEquivalent(event) {
-                return nil
-            }
-            return event
-        }
+        return false
     }
 
     @discardableResult
@@ -1642,10 +2159,6 @@ class CustomKeyView: NSView {
         }
 
         if isEditorActive {
-            if let firstResponderView = window?.firstResponder as? NSView,
-               firstResponderView !== self {
-                return firstResponderView.performKeyEquivalent(with: event)
-            }
             return false
         }
 

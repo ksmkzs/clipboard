@@ -47,6 +47,11 @@ Candidate MVP:
 - text-item editor mode with keyboard editing commands
 - experimental translation with configurable target language
 
+Explicit clipboard-capture policy:
+
+- User-initiated native copy / cut actions originating inside ClipboardHistory itself, including the editor, preview, Edit menu, and context menus, are intentionally treated as ordinary clipboard activity and captured into history
+- Only programmatic clipboard writes performed by the app itself for copy-back, transform copy-back, or internal paste flows should be suppressed from re-capture
+
 Features that need an explicit decision before public release:
 
 - search
@@ -110,7 +115,8 @@ Robustness test matrix:
 - corrupted SwiftData store
 - save failures due to filesystem issues
 - app relaunch after stored history exists
-- internal paste operations not re-entering capture
+- app-initiated programmatic copy-back and internal paste operations not re-entering capture
+- user-initiated native copy / cut inside the editor, preview, menus, and context menus remaining capture targets by design
 - history limit trimming and associated image deletion
 - pinned-area collapsed / expanded interaction state
 - deleting pinned and unpinned items, including image cleanup and pin-order normalization
@@ -221,6 +227,26 @@ Remaining gaps or non-guaranteed areas:
 - image sizing and layout fidelity
 - pixel-perfect editor-to-preview scroll sync
 - GitHub / Qiita-exact rendering parity
+
+Observed regressions from the 2026-04-04 manual stress pass:
+
+- nested unordered / ordered lists flatten unexpectedly
+- mixed-list hierarchy collapses
+- task list checkboxes disappear and degrade to plain lists
+- blockquotes render as plain text instead of quote blocks
+- fenced code block boundaries collapse
+- tables render as plain text instead of table structure
+- reference-style links are left unresolved
+- footnote-like syntax remains literal
+- escaped markdown punctuation still shows the backslash
+
+Follow-up stress-sample verification on the same date narrowed the residual issues to:
+
+- mixed-list rendering needs an HTML-vs-rendered-output check because top-level unordered siblings can still look nested in the shipped preview
+- an outer fence longer than three backticks breaks when it contains an inner triple-backtick block
+- footnotes pass in source/tests but can still appear unresolved in the deployed build, so deployment drift must be ruled out
+
+This observed set must stay covered by renderer regression tests going forward.
 
 ## 7. Execution Order
 

@@ -162,6 +162,23 @@ class ClipboardDataManager {
         fetchAllItems()
     }
 
+    func resetValidationStore() {
+        pendingSaveWorkItem?.cancel()
+        pendingSaveWorkItem = nil
+
+        for item in fetchAllItems() {
+            deleteImageFileIfNeeded(for: item)
+            deleteLargeTextFileIfNeeded(for: item)
+            modelContext.delete(item)
+        }
+
+        updatePinLabels([:])
+        clearDirectoryContents(at: noteDraftDirectory)
+        clearDirectoryContents(at: largeTextDirectory)
+        clearDirectoryContents(at: imageCacheDirectory)
+        _ = saveModelContext()
+    }
+
     func pinLabel(for itemID: UUID) -> String? {
         let label = pinLabels()[itemID.uuidString]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return label.isEmpty ? nil : label
@@ -676,6 +693,18 @@ class ClipboardDataManager {
         guard let fileName else { return }
         let fileURL = largeTextDirectory.appendingPathComponent(fileName)
         try? FileManager.default.removeItem(at: fileURL)
+    }
+
+    private func clearDirectoryContents(at directoryURL: URL) {
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: nil
+        ) else {
+            return
+        }
+        for url in contents {
+            try? FileManager.default.removeItem(at: url)
+        }
     }
     
     private func extractRawImageData(from pasteboard: NSPasteboard) -> Data? {

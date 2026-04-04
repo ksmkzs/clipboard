@@ -13,28 +13,51 @@ class ClipboardController {
     private var lastChangeCount: Int
     private let dataManager: ClipboardDataManager
     private var lastCapturedDedupeKey: String?
+    private let pollingInterval: TimeInterval
+    private let copyCapturePollingInterval: TimeInterval
+    private let copyCaptureTimeout: TimeInterval
     var onExternalCapture: (() -> Void)?
     var shouldHandleKeyboardCopyEvent: (() -> Bool)?
     private var suppressNextExternalCapture = false
     private var suppressNextCopyKeyCapture = false
     private var eventTap: CFMachPort?
     private var eventTapRunLoopSource: CFRunLoopSource?
+    private var pasteboardPollingTimer: DispatchSourceTimer?
     private var pendingCopyCaptureTimer: DispatchSourceTimer?
     
     // 自アプリからのペースト（書き戻し）時に発生するイベントを無視するためのフラグ
     var isPastingInternally = false
 
-    init(dataManager: ClipboardDataManager) {
+    init(
+        dataManager: ClipboardDataManager,
+        pollingInterval: TimeInterval = 0.2,
+        copyCapturePollingInterval: TimeInterval = 0.01,
+        copyCaptureTimeout: TimeInterval = 1.2
+    ) {
         self.dataManager = dataManager
         self.lastChangeCount = pasteboard.changeCount
+        self.pollingInterval = pollingInterval
+        self.copyCapturePollingInterval = copyCapturePollingInterval
+        self.copyCaptureTimeout = copyCaptureTimeout
     }
 
     func startMonitoring() {
+        startPasteboardPollingIfNeeded()
         installCopyEventTapIfNeeded()
     }
 
     func syncNow() {
         capturePasteboardIfNeeded()
+    }
+
+    func resetCaptureState() {
+        lastChangeCount = pasteboard.changeCount
+        lastCapturedDedupeKey = nil
+        suppressNextExternalCapture = false
+        suppressNextCopyKeyCapture = false
+        isPastingInternally = false
+        pendingCopyCaptureTimer?.cancel()
+        pendingCopyCaptureTimer = nil
     }
 
     deinit {
@@ -44,7 +67,20 @@ class ClipboardController {
         if let eventTap {
             CGEvent.tapEnable(tap: eventTap, enable: false)
         }
+        pasteboardPollingTimer?.cancel()
         pendingCopyCaptureTimer?.cancel()
+    }
+
+    private func startPasteboardPollingIfNeeded() {
+        guard pasteboardPollingTimer == nil else { return }
+
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.main)
+        timer.schedule(deadline: .now() + pollingInterval, repeating: pollingInterval)
+        timer.setEventHandler { [weak self] in
+            self?.capturePasteboardIfNeeded()
+        }
+        pasteboardPollingTimer = timer
+        timer.resume()
     }
 
     private func installCopyEventTapIfNeeded() {
@@ -114,8 +150,9 @@ class ClipboardController {
 
         let previousChangeCount = pasteboard.changeCount
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.main)
-        var attemptsRemaining = 120
-        timer.schedule(deadline: .now() + 0.01, repeating: 0.01)
+        let maxAttempts = max(1, Int(ceil(copyCaptureTimeout / copyCapturePollingInterval)))
+        var attemptsRemaining = maxAttempts
+        timer.schedule(deadline: .now() + copyCapturePollingInterval, repeating: copyCapturePollingInterval)
         timer.setEventHandler { [weak self] in
             guard let self else {
                 timer.cancel()

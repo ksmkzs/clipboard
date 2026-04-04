@@ -47,6 +47,11 @@ Candidate MVP:
 - keyboard editing command 付き text-item editor mode
 - configurable experimental translation
 
+clipboard capture の明示方針:
+
+- ClipboardHistory 自身の editor / preview / menu / context-menu からの user-initiated native copy / cut も、通常の clipboard activity として履歴 capture 対象に含める
+- capture から除外するのは、app 自身が programmatic に行う copy-back、transform copy-back、internal paste に伴う pasteboard 書き込みだけとする
+
 public release 前に明示判断が必要な点:
 
 - search
@@ -110,7 +115,8 @@ Robustness test matrix:
 - corrupted SwiftData store
 - filesystem issue による save failure
 - stored history がある状態での app relaunch
-- internal paste operation が capture に戻らないこと
+- app 自身の programmatic copy-back / internal paste operation が capture に戻らないこと
+- editor / preview / menu / context-menu からの user-initiated native copy / cut は意図通り履歴化されること
 - history limit trimming と image deletion
 - pinned-area collapsed / expanded state
 - pinned / unpinned item の delete、image cleanup、pin-order normalization
@@ -221,6 +227,26 @@ Initial robustness tasks:
 - image size / layout fidelity
 - editor と preview の pixel-perfect scroll sync
 - GitHub / Qiita と完全一致する rendering
+
+2026-04-04 時点で、実機確認から次の regression を観測済み:
+
+- nested unordered / ordered list がフラット化する
+- mixed list の階層が壊れる
+- task list checkbox が表示されず、通常 list に崩れる
+- blockquote が quote として描画されず plain text 化する
+- fenced code block のブロック境界が壊れる
+- table が table として描画されず plain text 化する
+- reference-style link が解決されない
+- footnote 風記法が未解釈のまま残る
+- escape 記法の backslash がそのまま見える
+
+同日の stress sample 再確認では、多くは改善したが次の残件を追加観測:
+
+- mixed list は renderer HTML 上は sibling list であっても、実機で top-level unordered が nested に見えるケースがあり、HTML と実表示の両方を再確認する
+- 4 backticks 以上の outer fence の中に 3 backticks の code block を含むケースで fence 境界が壊れる
+- footnote は source/test では解決していても、配布 build の実機表示で未解釈に見えるケースがあり、deployment drift を含めて再確認する
+
+この観測セットは、以後の preview 修正で必ず回帰確認する。
 
 ## 7. Execution Order
 

@@ -64,7 +64,10 @@ struct ClipboardHistoryView: View {
     var onPasteRequest: (ClipboardItem) -> Void
     var onOpenSettings: () -> Void
     var onClosePanel: () -> Void
+    var onPinnedAreaVisibilityChanged: (Bool) -> Void = { _ in }
+    var onFocusChanged: (ClipboardItem?) -> Void = { _ in }
     var onSelectionChanged: (ClipboardItem?) -> Void = { _ in }
+    var onInlineEditorStateChanged: (UUID?, Bool, Bool) -> Void = { _, _, _ in }
     @State private var items: [ClipboardItem] = []
     @State private var selectedItemID: UUID?
     @State private var focusedItemID: UUID?
@@ -106,6 +109,10 @@ struct ClipboardHistoryView: View {
     }
     
     var body: some View {
+        decoratedBody
+    }
+
+    private var baseBody: some View {
         VStack(spacing: 0) {
             header
 
@@ -120,6 +127,10 @@ struct ClipboardHistoryView: View {
                 }
             }
         }
+    }
+
+    private var decoratedBody: some View {
+        baseBody
         .background(
             ZStack {
                 VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
@@ -135,70 +146,33 @@ struct ClipboardHistoryView: View {
         .onExitCommand(perform: {
             handleEscapeAction()
         })
-        .onReceive(NotificationCenter.default.publisher(for: .clipboardPanelWillOpen)) { _ in
-            isPinnedAreaVisible = false
-            historyDetailItemID = nil
-            pinnedDetailItemID = nil
-            editingItemID = nil
-            editorDraftText = ""
-            isMarkdownPreviewVisible = false
-            refreshItemsFromStore()
-            resetSelection(shouldScroll: true)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .clipboardPanelWillOpen)) { notification in
-            if let targetName = notification.userInfo?["targetAppName"] as? String, !targetName.isEmpty {
-                pasteTargetName = targetName
-            } else {
-                pasteTargetName = "previous app"
-            }
-            if let arrowSymbol = notification.userInfo?["targetArrowSymbol"] as? String, !arrowSymbol.isEmpty {
-                pasteTargetArrowSymbol = arrowSymbol
-            } else {
-                pasteTargetArrowSymbol = "arrow.down.left"
-            }
-
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .clipboardPanelWillClose)) { _ in
-            commitActiveEditorIfNeeded()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .clipboardItemsDidChange)) { _ in
-            refreshItemsFromStore()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .clipboardTransformRequested)) { notification in
-            guard let action = notification.userInfo?["action"] as? String else { return }
-            switch action {
-            case "join":
-                if editingItemID != nil {
-                    NotificationCenter.default.post(
-                        name: .editorCommandRequested,
-                        object: nil,
-                        userInfo: ["command": EditorCommand.joinLines.rawValue]
-                    )
-                } else {
-                    joinSelectedItemLines()
-                }
-            case "normalize":
-                if editingItemID != nil {
-                    NotificationCenter.default.post(
-                        name: .editorCommandRequested,
-                        object: nil,
-                        userInfo: ["command": EditorCommand.normalizeForCommand.rawValue]
-                    )
-                } else {
-                    normalizeSelectedItemForCommand()
-                }
-            default:
-                break
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .clipboardManualNoteCreated)) { notification in
-            guard let itemID = notification.userInfo?["itemID"] as? UUID else { return }
-            refreshItemsFromStore()
-            isPinnedAreaVisible = false
-            selectionScope = .history
-            commitSelection(itemID, in: .history, shouldScroll: true)
-            showToast("New note")
-        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: .clipboardPanelWillOpen),
+            perform: handlePanelWillOpen
+        )
+        .onReceive(
+            NotificationCenter.default.publisher(for: .clipboardPanelWillClose),
+            perform: handlePanelWillClose
+        )
+        .onAppear(perform: handlePanelValidationAppear)
+        .onChange(of: isPinnedAreaVisible, perform: handlePinnedAreaVisibilityChanged)
+        .onChange(of: selectionScope, perform: handleSelectionScopeChanged)
+        .onReceive(
+            NotificationCenter.default.publisher(for: .clipboardItemsDidChange),
+            perform: handleClipboardItemsDidChange
+        )
+        .onReceive(
+            NotificationCenter.default.publisher(for: .clipboardTransformRequested),
+            perform: handleClipboardTransformRequested
+        )
+        .onReceive(
+            NotificationCenter.default.publisher(for: .clipboardManualNoteCreated),
+            perform: handleClipboardManualNoteCreated
+        )
+        .onReceive(
+            NotificationCenter.default.publisher(for: .clipboardPanelValidationRequested),
+            perform: handlePanelValidationNotification
+        )
         .background(EventHandlingView(
             isEditorActive: editingItemID != nil,
             togglePinShortcut: appDelegate.settings.togglePinShortcut,
@@ -240,48 +214,240 @@ struct ClipboardHistoryView: View {
             onResetZoom: { appDelegate.resetInterfaceZoom() }
         ))
         .overlay(alignment: .bottom) {
-            if !toastEntries.isEmpty {
-                VStack(spacing: 6) {
-                    ForEach(toastEntries.suffix(Self.maxVisibleToasts)) { toast in
-                        Text(toast.message)
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(toast.style.backgroundColor)
-                            .clipShape(Capsule())
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
-                    }
-                }
-                .padding(.bottom, 12)
-            }
+            toastOverlay
         }
         .overlay(alignment: .trailing) {
             pinHandle
         }
         .overlay(alignment: .bottom) {
-            WindowResizeCue(text: "↕")
-                .padding(.bottom, 6)
-                .allowsHitTesting(false)
+            verticalResizeCue
         }
         .overlay(alignment: .trailing) {
-            WindowResizeCue(text: "↔")
-                .padding(.trailing, 28)
-                .allowsHitTesting(false)
+            horizontalResizeCue
         }
         .overlay(alignment: .bottomTrailing) {
-            WindowResizeCue(text: "⤡")
-                .padding(.trailing, 8)
-                .padding(.bottom, 6)
-                .allowsHitTesting(false)
+            diagonalResizeCue
         }
         .animation(.easeOut(duration: 0.14), value: toastEntries)
-        .onAppear {
-            refreshItemsFromStore()
+        .onAppear(perform: handleAppear)
+        .onChange(of: selectedItemID, perform: handleSelectedItemIDChanged)
+        .onChange(of: focusedItemID, perform: handleFocusedItemIDChanged)
+        .onChange(of: editingItemID, perform: handleEditingItemIDChanged)
+        .onChange(of: isMarkdownPreviewVisible, perform: handleMarkdownPreviewVisibilityChanged)
+        .onChange(of: editorDraftText, perform: handleEditorDraftTextChanged)
+    }
+
+    private func handleAppear() {
+        refreshItemsFromStore()
+        notifyInlineEditorStateChanged()
+    }
+
+    private func handlePanelWillOpen(_ notification: Notification) {
+        isPinnedAreaVisible = false
+        historyDetailItemID = nil
+        pinnedDetailItemID = nil
+        editingItemID = nil
+        editorDraftText = ""
+        isMarkdownPreviewVisible = false
+        refreshItemsFromStore()
+        resetSelection(shouldScroll: true)
+
+        if let targetName = notification.userInfo?["targetAppName"] as? String, !targetName.isEmpty {
+            pasteTargetName = targetName
+        } else {
+            pasteTargetName = "previous app"
         }
-        .onChange(of: selectedItemID) { _, _ in
-            onSelectionChanged(selectedItem())
+        if let arrowSymbol = notification.userInfo?["targetArrowSymbol"] as? String, !arrowSymbol.isEmpty {
+            pasteTargetArrowSymbol = arrowSymbol
+        } else {
+            pasteTargetArrowSymbol = "arrow.down.left"
         }
+    }
+
+    private func handlePanelWillClose(_: Notification) {
+        commitActiveEditorIfNeeded()
+    }
+
+    private func handlePanelValidationAppear() {
+        onPinnedAreaVisibilityChanged(isPinnedAreaVisible)
+        PanelValidationState.shared.pinnedAreaVisible = isPinnedAreaVisible
+        PanelValidationState.shared.selectionScopeRaw = selectionScope == .pinned ? "pinned" : "history"
+    }
+
+    private func handlePinnedAreaVisibilityChanged(_ newValue: Bool) {
+        onPinnedAreaVisibilityChanged(newValue)
+        PanelValidationState.shared.pinnedAreaVisible = newValue
+    }
+
+    private func handleSelectionScopeChanged(_ newValue: SelectionScope) {
+        PanelValidationState.shared.selectionScopeRaw = newValue == .pinned ? "pinned" : "history"
+    }
+
+    private func handleSelectedItemIDChanged(_: ClipboardItem.ID?) {
+        onSelectionChanged(selectedItem())
+    }
+
+    private func handleFocusedItemIDChanged(_: ClipboardItem.ID?) {
+        onFocusChanged(focusedItem())
+    }
+
+    private func handleEditingItemIDChanged(_ newValue: ClipboardItem.ID?) {
+        onInlineEditorStateChanged(newValue, isInlineEditorDirty, isMarkdownPreviewVisible)
+    }
+
+    private func handleMarkdownPreviewVisibilityChanged(_ newValue: Bool) {
+        onInlineEditorStateChanged(editingItemID, isInlineEditorDirty, newValue)
+    }
+
+    private func handleEditorDraftTextChanged(_: String) {
+        notifyInlineEditorStateChanged()
+    }
+
+    private func notifyInlineEditorStateChanged() {
+        onInlineEditorStateChanged(editingItemID, isInlineEditorDirty, isMarkdownPreviewVisible)
+    }
+
+    private func handleClipboardItemsDidChange(_: Notification) {
+        refreshItemsFromStore()
+    }
+
+    private func handleClipboardTransformRequested(_ notification: Notification) {
+        guard let action = notification.userInfo?["action"] as? String else { return }
+        switch action {
+        case "join":
+            if editingItemID != nil {
+                NotificationCenter.default.post(
+                    name: .editorCommandRequested,
+                    object: nil,
+                    userInfo: ["command": EditorCommand.joinLines.rawValue]
+                )
+            } else {
+                joinSelectedItemLines()
+            }
+        case "normalize":
+            if editingItemID != nil {
+                NotificationCenter.default.post(
+                    name: .editorCommandRequested,
+                    object: nil,
+                    userInfo: ["command": EditorCommand.normalizeForCommand.rawValue]
+                )
+            } else {
+                normalizeSelectedItemForCommand()
+            }
+        default:
+            break
+        }
+    }
+
+    private func handleClipboardManualNoteCreated(_ notification: Notification) {
+        guard let itemID = notification.userInfo?["itemID"] as? UUID else { return }
+        refreshItemsFromStore()
+        isPinnedAreaVisible = false
+        selectionScope = .history
+        commitSelection(itemID, in: .history, shouldScroll: true)
+        showToast("New note")
+    }
+
+    private func handlePanelValidationNotification(_ notification: Notification) {
+        guard let action = notification.userInfo?["action"] as? String else { return }
+        switch action {
+        case "moveDown":
+            moveSelection(by: 1)
+        case "moveUp":
+            moveSelection(by: -1)
+        case "moveLeft":
+            moveSelectionHorizontally(to: .history)
+        case "moveRight":
+            moveSelectionHorizontally(to: .pinned)
+        case "commitSelection":
+            commitFocusedSelection()
+        case "togglePinnedArea":
+            togglePinnedAreaFromKeyboard()
+        case "togglePin":
+            togglePinnedForSelectedItem()
+        case "togglePinFocused":
+            togglePinnedForFocusedItem()
+        case "deleteSelected":
+            deleteSelectedItem()
+        case "deleteFocused":
+            deleteFocusedItem()
+        case "toggleEditor":
+            toggleEditorForSelectedItem()
+        case "openFocusedEditor":
+            openEditorForFocusedItem()
+        case "copySelected":
+            copySelectedItem()
+        case "pasteSelected":
+            pasteSelectedItem()
+        case "joinSelected":
+            joinSelectedItemLines()
+        case "normalizeSelected":
+            normalizeSelectedItemForCommand()
+        case "setEditorText":
+            guard let text = notification.userInfo?["text"] as? String, editingItemID != nil else { return }
+            editorDraftText = text
+        case "commitEditor":
+            if let editingItemID {
+                commitEditorIfNeeded(for: editingItemID)
+            }
+        case "cancelEditor":
+            if let editingItemID {
+                cancelEditorIfNeeded(for: editingItemID)
+            }
+        default:
+            return
+        }
+    }
+
+    private var isInlineEditorDirty: Bool {
+        guard let editingItemID,
+              let item = allItemsByID[editingItemID],
+              let originalText = dataManager.resolvedText(for: item) else {
+            return false
+        }
+        return editorDraftText != originalText
+    }
+
+    @ViewBuilder
+    private var toastOverlay: some View {
+        if !toastEntries.isEmpty {
+            VStack(spacing: 6) {
+                ForEach(toastEntries.suffix(Self.maxVisibleToasts)) { toast in
+                    toastChip(for: toast)
+                }
+            }
+            .padding(.bottom, 12)
+        }
+    }
+
+    private func toastChip(for toast: ToastEntry) -> some View {
+        Text(toast.message)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundColor(.white)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(toast.style.backgroundColor)
+            .clipShape(Capsule())
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
+    private var verticalResizeCue: some View {
+        WindowResizeCue(text: "↕")
+            .padding(.bottom, 6)
+            .allowsHitTesting(false)
+    }
+
+    private var horizontalResizeCue: some View {
+        WindowResizeCue(text: "↔")
+            .padding(.trailing, 28)
+            .allowsHitTesting(false)
+    }
+
+    private var diagonalResizeCue: some View {
+        WindowResizeCue(text: "⤡")
+            .padding(.trailing, 8)
+            .padding(.bottom, 6)
+            .allowsHitTesting(false)
     }
 
     private var header: some View {
@@ -318,7 +484,7 @@ struct ClipboardHistoryView: View {
             onToggleDetail: { itemID in
                 toggleDetail(for: itemID, in: .history)
             },
-            onBeginEditing: beginEditing,
+            onBeginEditing: { beginEditing($0, adoptSelection: true) },
             onCommitEditor: commitEditorIfNeeded,
             onCancelEditor: cancelEditorIfNeeded,
             onToggleMarkdownPreview: toggleMarkdownPreview,
@@ -367,7 +533,7 @@ struct ClipboardHistoryView: View {
             onToggleDetail: { itemID in
                 toggleDetail(for: itemID, in: .pinned)
             },
-            onBeginEditing: beginEditing,
+            onBeginEditing: { beginEditing($0, adoptSelection: true) },
             onCommitEditor: commitEditorIfNeeded,
             onCancelEditor: cancelEditorIfNeeded,
             onToggleMarkdownPreview: toggleMarkdownPreview,
@@ -579,10 +745,21 @@ struct ClipboardHistoryView: View {
         togglePinned(item)
     }
 
+    private func togglePinnedForFocusedItem() {
+        guard let item = focusedItem() else { return }
+        togglePinned(item)
+    }
+
     private func deleteSelectedItem() {
         guard let selectedItemID else { return }
         commitActiveEditorIfNeeded()
         deleteItem(selectedItemID)
+    }
+
+    private func deleteFocusedItem() {
+        guard let focusedItemID else { return }
+        commitActiveEditorIfNeeded()
+        deleteItem(focusedItemID)
     }
 
     private func deleteItem(_ id: UUID) {
@@ -782,7 +959,7 @@ struct ClipboardHistoryView: View {
         cachedPinnedItems = pinnedItems
         cachedAllItemsByID = Dictionary(uniqueKeysWithValues: allItems.map { ($0.id, $0) })
         cachedPinnedItemIDs = Set(pinnedItems.map(\.id))
-        cachedHistoryItemIndexByID = Dictionary(uniqueKeysWithValues: allItems.enumerated().map { ($0.element.id, $0.offset) })
+        cachedHistoryItemIndexByID = Dictionary(uniqueKeysWithValues: historyItems.enumerated().map { ($0.element.id, $0.offset) })
         cachedPinnedItemIndexByID = Dictionary(uniqueKeysWithValues: pinnedItems.enumerated().map { ($0.element.id, $0.offset) })
         normalizeSelection()
     }
@@ -887,7 +1064,18 @@ struct ClipboardHistoryView: View {
         if editingItemID == item.id {
             commitEditorIfNeeded(for: item.id)
         } else {
-            beginEditing(item.id)
+            commitActiveEditorIfNeeded()
+            beginEditing(item.id, adoptSelection: true)
+        }
+    }
+
+    private func openEditorForFocusedItem() {
+        guard let item = focusedItem(), item.type == .text else { return }
+        if editingItemID == item.id {
+            commitEditorIfNeeded(for: item.id)
+        } else {
+            commitActiveEditorIfNeeded()
+            beginEditing(item.id, adoptSelection: false)
         }
     }
 
@@ -944,7 +1132,7 @@ struct ClipboardHistoryView: View {
         }
     }
 
-    private func beginEditing(_ itemID: UUID) {
+    private func beginEditing(_ itemID: UUID, adoptSelection: Bool) {
         guard let item = allItemsByID[itemID],
               item.type == .text else { return }
         if item.isLargeText || item.textByteCount > Self.maxInlineTextBytes {
@@ -956,7 +1144,12 @@ struct ClipboardHistoryView: View {
         editingItemID = itemID
         editorDraftText = dataManager.resolvedText(for: item) ?? ""
         isMarkdownPreviewVisible = false
-        commitSelection(itemID, in: pinnedItemIDs.contains(itemID) ? .pinned : .history, shouldScroll: false)
+        let scope = pinnedItemIDs.contains(itemID) ? SelectionScope.pinned : .history
+        if adoptSelection {
+            commitSelection(itemID, in: scope, shouldScroll: false)
+        } else {
+            focusItem(itemID, in: scope, shouldScroll: false)
+        }
     }
 
     private func commitActiveEditorIfNeeded() {
@@ -1479,6 +1672,7 @@ struct StandaloneNoteEditorView: View {
 
     let initialText: String
     @ObservedObject var appDelegate: AppDelegate
+    @ObservedObject var saveStatusState: AppDelegate.EditorSaveStatusState
     let codexContext: AppDelegate.CodexDraftContext?
     let commitMode: CommitMode
     let initialMarkdownPreviewVisible: Bool
@@ -1487,6 +1681,7 @@ struct StandaloneNoteEditorView: View {
     let onSave: () -> Void
     let onSaveAs: () -> Void
     let onClose: () -> Void
+    let onMarkdownPreviewVisibilityChanged: (Bool) -> Void
     let onDiscardOrphanCodex: (() -> Void)?
 
     @State private var draftText = ""
@@ -1515,15 +1710,15 @@ struct StandaloneNoteEditorView: View {
     }
 
     private var isDirty: Bool {
-        _ = appDelegate.noteEditorSaveRevision
-        return draftText != appDelegate.currentNoteEditorLastPersistedText
+        _ = saveStatusState.saveRevision
+        return draftText != saveStatusState.lastPersistedText
     }
 
     private var saveStatusText: String {
         if isDirty {
             return t("Unsaved", "未保存")
         }
-        switch appDelegate.noteEditorLastSaveDestination {
+        switch saveStatusState.lastSaveDestination {
         case .clipboard:
             return t("Saved to Clipboard", "クリップボード保存済み")
         case .file:
@@ -1537,7 +1732,7 @@ struct StandaloneNoteEditorView: View {
         if isDirty {
             return "circle.fill"
         }
-        switch appDelegate.noteEditorLastSaveDestination {
+        switch saveStatusState.lastSaveDestination {
         case .clipboard:
             return "doc.on.clipboard"
         case .file:
@@ -1551,7 +1746,7 @@ struct StandaloneNoteEditorView: View {
         if isDirty {
             return .orange
         }
-        switch appDelegate.noteEditorLastSaveDestination {
+        switch saveStatusState.lastSaveDestination {
         case .clipboard:
             return Color(red: 0.77, green: 0.60, blue: 0.14)
         case .file:
@@ -1602,12 +1797,26 @@ struct StandaloneNoteEditorView: View {
         .onAppear {
             loadCurrentText()
             isMarkdownPreviewVisible = initialMarkdownPreviewVisible
+            onMarkdownPreviewVisibilityChanged(initialMarkdownPreviewVisible)
             if markdownPreviewWidth == 0 {
                 markdownPreviewWidth = scaled(Self.markdownPreviewSidebarWidth)
             }
         }
         .onChange(of: draftText) { _, newValue in
             onDraftChange(newValue)
+        }
+        .onChange(of: isMarkdownPreviewVisible) { _, newValue in
+            onMarkdownPreviewVisibilityChanged(newValue)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .editorViewValidationRequested)) { notification in
+            guard let action = notification.userInfo?["action"] as? String else { return }
+            switch action {
+            case "setPreviewWidth":
+                guard let rawValue = notification.userInfo?["value"] as? Double else { return }
+                markdownPreviewWidth = CGFloat(rawValue)
+            default:
+                break
+            }
         }
     }
 
@@ -2533,5 +2742,6 @@ extension Notification.Name {
     static let clipboardPanelWillClose = Notification.Name("clipboardPanelWillClose")
     static let clipboardHelpRequested = Notification.Name("clipboardHelpRequested")
     static let clipboardManualNoteCreated = Notification.Name("clipboardManualNoteCreated")
+    static let clipboardPanelValidationRequested = Notification.Name("clipboardPanelValidationRequested")
     static let clipboardTransformRequested = Notification.Name("clipboardTransformRequested")
 }

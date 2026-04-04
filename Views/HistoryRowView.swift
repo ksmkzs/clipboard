@@ -571,25 +571,23 @@ private struct PinNameField: NSViewRepresentable {
         Coordinator(text: $text, onSubmit: onSubmit, onTab: onTab)
     }
 
-    func makeNSView(context: Context) -> PinNameTextField {
-        let field = PinNameTextField()
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField()
         field.isBordered = false
         field.drawsBackground = false
         field.focusRingType = .none
         field.font = .systemFont(ofSize: fontSize, weight: .semibold)
         field.placeholderString = placeholder
         field.delegate = context.coordinator
-        field.onTab = context.coordinator.handleTab
         return field
     }
 
-    func updateNSView(_ nsView: PinNameTextField, context: Context) {
+    func updateNSView(_ nsView: NSTextField, context: Context) {
         nsView.placeholderString = placeholder
         nsView.font = .systemFont(ofSize: fontSize, weight: .semibold)
         if nsView.stringValue != text {
             nsView.stringValue = text
         }
-        nsView.onTab = context.coordinator.handleTab
     }
 
     final class Coordinator: NSObject, NSTextFieldDelegate {
@@ -622,22 +620,5 @@ private struct PinNameField: NSViewRepresentable {
             }
             return false
         }
-
-        func handleTab(_ value: String) {
-            text = value
-            onTab()
-        }
-    }
-}
-
-private final class PinNameTextField: NSTextField {
-    var onTab: ((String) -> Void)?
-
-    override func keyDown(with event: NSEvent) {
-        if event.keyCode == UInt16(kVK_Tab) {
-            onTab?(stringValue)
-            return
-        }
-        super.keyDown(with: event)
     }
 }
