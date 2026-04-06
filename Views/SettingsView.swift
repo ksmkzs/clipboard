@@ -63,6 +63,7 @@ struct SettingsView: View {
         VStack(spacing: 0) {
             Form {
                 generalSection
+                localHistorySection
                 codexSection
                 shortcutsSection
                 translationSection
@@ -108,7 +109,7 @@ struct SettingsView: View {
             .padding(.vertical, 14)
             .background(Color(nsColor: .windowBackgroundColor))
         }
-        .frame(width: 620, height: 640)
+        .frame(width: 620, height: 700)
         .onAppear {
             syncDraftFromSettings()
             refreshCodexIntegrationStatus()
@@ -172,7 +173,7 @@ struct SettingsView: View {
                 }
                 Stepper(value: $draftSettings.historyLimit, in: 25...500, step: 25) {
                     HStack {
-                        Text(t("History limit", "履歴保持数"))
+                        Text(t("Clipboard history limit", "クリップボード履歴保持数"))
                         Spacer()
                         Text("\(draftSettings.historyLimit)")
                             .foregroundStyle(.secondary)
@@ -190,6 +191,131 @@ struct SettingsView: View {
                 }
             },
             header: { Text(t("General", "一般")) }
+        )
+    }
+
+    private var localHistorySection: some View {
+        Section(
+            content: {
+                Toggle(
+                    t("Enable automatic file local history", "ファイルのローカル履歴を自動保存"),
+                    isOn: $draftSettings.localFileHistoryEnabled
+                )
+                Toggle(
+                    t("Track files opened in ClipboardHistory", "ClipboardHistory で開いたファイルも追跡"),
+                    isOn: $draftSettings.localFileHistoryTrackOpenedFiles
+                )
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(t("Watch directory", "監視ディレクトリ"))
+                    TextField(
+                        t("Optional directory path", "任意のディレクトリパス"),
+                        text: $draftSettings.localFileHistoryWatchedDirectoryPath
+                    )
+                    HStack {
+                        Button(t("Choose...", "選択...")) {
+                            if let selectedPath = chooseLocalHistoryDirectory(
+                                currentPath: draftSettings.localFileHistoryWatchedDirectoryPath
+                            ) {
+                                draftSettings.localFileHistoryWatchedDirectoryPath = selectedPath
+                            }
+                        }
+                        Button(t("Clear", "クリア")) {
+                            draftSettings.localFileHistoryWatchedDirectoryPath = ""
+                        }
+                        Spacer()
+                    }
+                }
+                TextField(
+                    t("Tracked extensions (comma separated)", "追跡する拡張子 (カンマ区切り)"),
+                    text: $draftSettings.localFileHistoryWatchedExtensions
+                )
+                Toggle(
+                    t("Include subdirectories", "サブディレクトリも含める"),
+                    isOn: $draftSettings.localFileHistoryWatchRecursively
+                )
+                Stepper(
+                    value: $draftSettings.localFileHistoryMaxSnapshotsPerFile,
+                    in: 5...200,
+                    step: 5
+                ) {
+                    HStack {
+                        Text(t("Snapshots per file", "ファイルごとの保存世代数"))
+                        Spacer()
+                        Text("\(draftSettings.localFileHistoryMaxSnapshotsPerFile)")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Picker(
+                    t("When source file is deleted", "元ファイル削除時の履歴の扱い"),
+                    selection: $draftSettings.localFileHistoryDeletedSourceBehavior
+                ) {
+                    ForEach(FileLocalHistoryDeletedSourceBehavior.allCases) { behavior in
+                        Text(localHistoryDeletedSourceBehaviorTitle(for: behavior)).tag(behavior)
+                    }
+                }
+                if draftSettings.localFileHistoryDeletedSourceBehavior == .deleteAfterGracePeriod {
+                    Stepper(
+                        value: $draftSettings.localFileHistoryOrphanGracePeriodDays,
+                        in: 1...365,
+                        step: 1
+                    ) {
+                        HStack {
+                            Text(t("Orphan grace period (days)", "orphan 履歴の猶予日数"))
+                            Spacer()
+                            Text("\(draftSettings.localFileHistoryOrphanGracePeriodDays)")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                Toggle(
+                    t("Confirm before deleting history", "履歴削除前に確認する"),
+                    isOn: $draftSettings.localFileHistoryConfirmDestructiveActions
+                )
+                HStack {
+                    Button(t("Open local history folder", "ローカル履歴フォルダを開く")) {
+                        appDelegate.revealLocalHistoryStorageRoot()
+                    }
+                    Spacer()
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(
+                        t(
+                            "Tracked files",
+                            "追跡対象"
+                        )
+                    )
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    Text(
+                        t(
+                            "• Files opened in ClipboardHistory when the opened-file toggle is enabled\n• Files inside the watched directory whose extension matches the tracked list",
+                            "• 「ClipboardHistory で開いたファイルも追跡」が有効な時に、このアプリで開いたファイル\n• 監視ディレクトリ配下で、追跡対象拡張子に一致するファイル"
+                        )
+                    )
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                    Text(
+                        t(
+                            "Not tracked",
+                            "追跡しないもの"
+                        )
+                    )
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    Text(
+                        t(
+                            "• Untitled drafts and clipboard-only notes\n• Files outside the watched directory unless opened here\n• Files whose extension does not match the tracked list",
+                            "• 無題の下書きやクリップボード専用ノート\n• 監視ディレクトリ外にあり、このアプリで開いていないファイル\n• 追跡対象拡張子に一致しないファイル"
+                        )
+                    )
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+            },
+            header: { Text(t("Local History", "ローカル履歴")) }
         )
     }
 
@@ -458,6 +584,17 @@ struct SettingsView: View {
 
     private func themeTitle(for preset: InterfaceThemePreset) -> String {
         settingsLanguage == .japanese ? preset.definition.titleJapanese : preset.definition.titleEnglish
+    }
+
+    private func localHistoryDeletedSourceBehaviorTitle(for behavior: FileLocalHistoryDeletedSourceBehavior) -> String {
+        switch behavior {
+        case .keepAsOrphan:
+            return t("Keep as orphaned history", "orphan 履歴として残す")
+        case .deleteImmediately:
+            return t("Delete immediately", "すぐ削除する")
+        case .deleteAfterGracePeriod:
+            return t("Delete after grace period", "猶予後に削除する")
+        }
     }
 
     @ViewBuilder
@@ -1223,6 +1360,24 @@ struct SettingsView: View {
             NSEvent.removeMonitor(eventMonitor)
             self.eventMonitor = nil
         }
+    }
+
+    private func chooseLocalHistoryDirectory(currentPath: String) -> String? {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.prompt = t("Choose Directory", "ディレクトリを選択")
+        let trimmedPath = currentPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedPath.isEmpty {
+            panel.directoryURL = URL(fileURLWithPath: trimmedPath, isDirectory: true)
+        }
+
+        guard panel.runModal() == .OK else {
+            return nil
+        }
+        return panel.url?.standardizedFileURL.path
     }
 
     private func applyDraft() {

@@ -50,6 +50,7 @@
 					CodexIntegrationManager.swift,
 					ClipboardController.swift,
 					ClipboardDataManager.swift,
+					FileLocalHistoryManager.swift,
 					ClipboardStoragePaths.swift,
 					ClipboardStoreBootstrapper.swift,
 					HotKeyManager.swift,
@@ -70,15 +71,16 @@
 		};
 		7A1B2C3D4E5F678900112233 /* Exceptions for "ClipboardHistoryTests" folder in "ClipboardHistoryTests" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				AppDelegateTargetSelectionTests.swift,
-				ClipboardDataManagerBehaviorTests.swift,
-				CodexIntegrationManagerTests.swift,
-				ClipboardStoreBootstrapperTests.swift,
-				ClipboardWorkflowRegressionTests.swift,
-				EditorNSTextViewKeyboardTests.swift,
-				PanelKeyboardRoutingTests.swift,
-			);
+				membershipExceptions = (
+					AppDelegateTargetSelectionTests.swift,
+					ClipboardDataManagerBehaviorTests.swift,
+					CodexIntegrationManagerTests.swift,
+					ClipboardStoreBootstrapperTests.swift,
+					ClipboardWorkflowRegressionTests.swift,
+					EditorNSTextViewKeyboardTests.swift,
+					FileLocalHistoryManagerTests.swift,
+					PanelKeyboardRoutingTests.swift,
+				);
 			target = 0EA8FE362F510B9400F7AFAB /* ClipboardHistoryTests */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -420,7 +422,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+					CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = "";
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = BHX7Y6PRF8;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -432,7 +434,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.0;
+					MARKETING_VERSION = 1.0.8;
 				PRODUCT_BUNDLE_IDENTIFIER = "kazushi-koshimo.ClipboardHistory";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -452,7 +454,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+					CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = "";
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = BHX7Y6PRF8;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -464,7 +466,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.0;
+					MARKETING_VERSION = 1.0.8;
 				PRODUCT_BUNDLE_IDENTIFIER = "kazushi-koshimo.ClipboardHistory";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -480,11 +482,11 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+					CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = BHX7Y6PRF8;
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.0;
+					MARKETING_VERSION = 1.0.8;
 				PRODUCT_BUNDLE_IDENTIFIER = "kazushi-koshimo.ClipboardHistoryTests";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
@@ -498,11 +500,11 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+					CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = BHX7Y6PRF8;
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.0;
+					MARKETING_VERSION = 1.0.8;
 				PRODUCT_BUNDLE_IDENTIFIER = "kazushi-koshimo.ClipboardHistoryTests";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;

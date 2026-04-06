@@ -25,6 +25,7 @@ ClipboardHistory solves those problems with a compact workflow.
 - [x] Turn multi-line text into one sentence with one command
 - [x] Simple Markdown preview
 - [x] Open `.md`, `.txt`, and readable plain-text files directly
+- [x] Optional local file history for saved files and watched folders
 - [x] Copy already-normalized text in the first place
 - [x] Codex CLI integration so drafting text for the CLI feels natural
 
@@ -74,6 +75,18 @@ You can open `.md`, `.txt`, or any file that can be decoded as plain text.
 If Codex integration is enabled:
 
 - pressing `Ctrl+G` in Codex CLI opens the current draft in this window
+
+### Local File History
+
+Saved files can keep a local snapshot trail on this Mac.
+
+- the editor shows a `Saved •N` pill when snapshots exist
+- you can open the history pane, compare a snapshot against the current draft, and restore it into the draft
+- you can delete a single snapshot or clear the file's local history
+- tracking can come from either
+  - files opened in ClipboardHistory
+  - a watched directory plus extension filter
+- deleted source files can either stay as orphaned history or be pruned after a grace period
 
 ---
 
@@ -191,6 +204,7 @@ Settings currently include:
 - global shortcuts
 - standard window shortcuts
 - editor shortcuts
+- local file history policy
 - global special copy on / off
 - themes
 - UI zoom
@@ -236,6 +250,27 @@ If permission is not granted, some features will not work.
 ```zsh
 xcodebuild -project ClipboardHistory.xcodeproj -scheme ClipboardHistory -configuration Debug build
 ```
+
+---
+
+## Validation
+
+- full automated scheme check:
+
+```zsh
+xcodebuild test -project ClipboardHistory.xcodeproj -scheme ClipboardHistory -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=''
+```
+
+- broader validation entry point:
+
+```zsh
+./ClipboardHistoryTests/run_validation_suite.sh
+```
+
+- useful manual-check documents:
+  - [Local history debug file](./docs/local-history-debug.md)
+  - [Markdown preview stress test](./docs/markdown-preview-stress-test.md)
+  - [Validation matrix (Japanese)](./docs/validation-matrix.ja.md)
 
 ---
 

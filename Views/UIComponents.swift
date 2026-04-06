@@ -264,6 +264,55 @@ struct RawSelectableTextView: NSViewRepresentable {
     }
 }
 
+struct AttributedEditorPreviewTextView: NSViewRepresentable {
+    let attributedText: NSAttributedString
+    let fontSize: CGFloat
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = false
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+
+        let textView = NSTextView()
+        textView.drawsBackground = false
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isRichText = true
+        textView.importsGraphics = false
+        textView.usesFontPanel = false
+        textView.usesFindPanel = true
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.minSize = NSSize(width: 0, height: 0)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.textContainerInset = NSSize(width: 6, height: 6)
+        textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.defaultParagraphStyle = {
+            let style = NSMutableParagraphStyle()
+            style.lineBreakMode = .byWordWrapping
+            return style
+        }()
+        textView.textStorage?.setAttributedString(attributedText)
+
+        scrollView.documentView = textView
+        return scrollView
+    }
+
+    func updateNSView(_ nsView: NSScrollView, context: Context) {
+        guard let textView = nsView.documentView as? NSTextView else { return }
+        textView.textStorage?.setAttributedString(attributedText)
+        if textView.frame.width != nsView.contentSize.width {
+            textView.frame = NSRect(origin: .zero, size: nsView.contentSize)
+        }
+    }
+}
+
 struct EditorTextView: NSViewRepresentable {
     @Binding var text: String
     let fontSize: CGFloat

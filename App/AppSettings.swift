@@ -16,6 +16,14 @@ enum NewNoteReopenBehavior: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum FileLocalHistoryDeletedSourceBehavior: String, Codable, CaseIterable, Identifiable {
+    case keepAsOrphan
+    case deleteImmediately
+    case deleteAfterGracePeriod
+
+    var id: String { rawValue }
+}
+
 enum InterfaceThemePreset: String, Codable, CaseIterable, Identifiable {
     case graphite
     case terminal
@@ -134,6 +142,15 @@ struct AppSettings: Equatable {
     var interfaceZoomScale: Double
     var newNoteReopenBehavior: NewNoteReopenBehavior
     var interfaceThemePreset: InterfaceThemePreset
+    var localFileHistoryEnabled: Bool
+    var localFileHistoryTrackOpenedFiles: Bool
+    var localFileHistoryWatchedDirectoryPath: String
+    var localFileHistoryWatchedExtensions: String
+    var localFileHistoryWatchRecursively: Bool
+    var localFileHistoryMaxSnapshotsPerFile: Int
+    var localFileHistoryDeletedSourceBehavior: FileLocalHistoryDeletedSourceBehavior
+    var localFileHistoryOrphanGracePeriodDays: Int
+    var localFileHistoryConfirmDestructiveActions: Bool
 
     static let `default` = AppSettings(
         panelShortcut: defaultPanelShortcut,
@@ -218,7 +235,16 @@ struct AppSettings: Equatable {
         settingsLanguage: .english,
         interfaceZoomScale: defaultInterfaceZoomScale,
         newNoteReopenBehavior: .reset,
-        interfaceThemePreset: .graphite
+        interfaceThemePreset: .graphite,
+        localFileHistoryEnabled: FileLocalHistoryManager.Settings.default.isEnabled,
+        localFileHistoryTrackOpenedFiles: FileLocalHistoryManager.Settings.default.trackOpenedFiles,
+        localFileHistoryWatchedDirectoryPath: FileLocalHistoryManager.Settings.default.watchedDirectoryPath,
+        localFileHistoryWatchedExtensions: FileLocalHistoryManager.Settings.default.watchedExtensions,
+        localFileHistoryWatchRecursively: FileLocalHistoryManager.Settings.default.watchDirectoryRecursively,
+        localFileHistoryMaxSnapshotsPerFile: FileLocalHistoryManager.Settings.default.maxSnapshotsPerFile,
+        localFileHistoryDeletedSourceBehavior: FileLocalHistoryManager.Settings.default.deletedSourceBehavior,
+        localFileHistoryOrphanGracePeriodDays: FileLocalHistoryManager.Settings.default.orphanGracePeriodDays,
+        localFileHistoryConfirmDestructiveActions: true
     )
 
     var clampedInterfaceZoomScale: Double {
@@ -490,6 +516,15 @@ final class UserDefaultsAppSettingsStore: AppSettingsStore {
         static let interfaceZoomScale = "ui.zoomScale"
         static let newNoteReopenBehavior = "note.reopenBehavior"
         static let interfaceThemePreset = "ui.themePreset"
+        static let localFileHistoryEnabled = "fileLocalHistory.enabled"
+        static let localFileHistoryTrackOpenedFiles = "fileLocalHistory.trackOpenedFiles"
+        static let localFileHistoryWatchedDirectoryPath = "fileLocalHistory.watchedDirectoryPath"
+        static let localFileHistoryWatchedExtensions = "fileLocalHistory.watchedExtensions"
+        static let localFileHistoryWatchRecursively = "fileLocalHistory.watchRecursively"
+        static let localFileHistoryMaxSnapshotsPerFile = "fileLocalHistory.maxSnapshotsPerFile"
+        static let localFileHistoryDeletedSourceBehavior = "fileLocalHistory.deletedSourceBehavior"
+        static let localFileHistoryOrphanGracePeriodDays = "fileLocalHistory.orphanGracePeriodDays"
+        static let localFileHistoryConfirmDestructiveActions = "fileLocalHistory.confirmDestructiveActions"
     }
 
     private let userDefaults: UserDefaults
@@ -597,6 +632,34 @@ final class UserDefaultsAppSettingsStore: AppSettingsStore {
            let theme = InterfaceThemePreset(rawValue: rawValue) {
             settings.interfaceThemePreset = theme
         }
+        if userDefaults.object(forKey: Key.localFileHistoryEnabled) != nil {
+            settings.localFileHistoryEnabled = userDefaults.bool(forKey: Key.localFileHistoryEnabled)
+        }
+        if userDefaults.object(forKey: Key.localFileHistoryTrackOpenedFiles) != nil {
+            settings.localFileHistoryTrackOpenedFiles = userDefaults.bool(forKey: Key.localFileHistoryTrackOpenedFiles)
+        }
+        if let watchedDirectoryPath = userDefaults.string(forKey: Key.localFileHistoryWatchedDirectoryPath) {
+            settings.localFileHistoryWatchedDirectoryPath = watchedDirectoryPath
+        }
+        if let watchedExtensions = userDefaults.string(forKey: Key.localFileHistoryWatchedExtensions) {
+            settings.localFileHistoryWatchedExtensions = watchedExtensions
+        }
+        if userDefaults.object(forKey: Key.localFileHistoryWatchRecursively) != nil {
+            settings.localFileHistoryWatchRecursively = userDefaults.bool(forKey: Key.localFileHistoryWatchRecursively)
+        }
+        if userDefaults.object(forKey: Key.localFileHistoryMaxSnapshotsPerFile) != nil {
+            settings.localFileHistoryMaxSnapshotsPerFile = max(1, userDefaults.integer(forKey: Key.localFileHistoryMaxSnapshotsPerFile))
+        }
+        if let rawValue = userDefaults.string(forKey: Key.localFileHistoryDeletedSourceBehavior),
+           let behavior = FileLocalHistoryDeletedSourceBehavior(rawValue: rawValue) {
+            settings.localFileHistoryDeletedSourceBehavior = behavior
+        }
+        if userDefaults.object(forKey: Key.localFileHistoryOrphanGracePeriodDays) != nil {
+            settings.localFileHistoryOrphanGracePeriodDays = max(1, userDefaults.integer(forKey: Key.localFileHistoryOrphanGracePeriodDays))
+        }
+        if userDefaults.object(forKey: Key.localFileHistoryConfirmDestructiveActions) != nil {
+            settings.localFileHistoryConfirmDestructiveActions = userDefaults.bool(forKey: Key.localFileHistoryConfirmDestructiveActions)
+        }
 
         if migrateLegacyGlobalShortcutsIfNeeded(settings: &settings) {
             save(settings)
@@ -638,6 +701,15 @@ final class UserDefaultsAppSettingsStore: AppSettingsStore {
         userDefaults.set(settings.clampedInterfaceZoomScale, forKey: Key.interfaceZoomScale)
         userDefaults.set(settings.newNoteReopenBehavior.rawValue, forKey: Key.newNoteReopenBehavior)
         userDefaults.set(settings.interfaceThemePreset.rawValue, forKey: Key.interfaceThemePreset)
+        userDefaults.set(settings.localFileHistoryEnabled, forKey: Key.localFileHistoryEnabled)
+        userDefaults.set(settings.localFileHistoryTrackOpenedFiles, forKey: Key.localFileHistoryTrackOpenedFiles)
+        userDefaults.set(settings.localFileHistoryWatchedDirectoryPath, forKey: Key.localFileHistoryWatchedDirectoryPath)
+        userDefaults.set(settings.localFileHistoryWatchedExtensions, forKey: Key.localFileHistoryWatchedExtensions)
+        userDefaults.set(settings.localFileHistoryWatchRecursively, forKey: Key.localFileHistoryWatchRecursively)
+        userDefaults.set(max(1, settings.localFileHistoryMaxSnapshotsPerFile), forKey: Key.localFileHistoryMaxSnapshotsPerFile)
+        userDefaults.set(settings.localFileHistoryDeletedSourceBehavior.rawValue, forKey: Key.localFileHistoryDeletedSourceBehavior)
+        userDefaults.set(max(1, settings.localFileHistoryOrphanGracePeriodDays), forKey: Key.localFileHistoryOrphanGracePeriodDays)
+        userDefaults.set(settings.localFileHistoryConfirmDestructiveActions, forKey: Key.localFileHistoryConfirmDestructiveActions)
         userDefaults.set(Self.currentMigrationVersion, forKey: Key.migrationVersion)
     }
 

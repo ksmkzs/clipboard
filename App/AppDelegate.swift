@@ -265,13 +265,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     
     private enum MenuTag: Int {
         case togglePanel = 100
-        case translateNow = 101
-        case openSettings = 102
-        case newNote = 103
-        case newMarkdownFile = 104
-        case newTextFile = 105
-        case openMarkdownFile = 106
-        case openTextFile = 107
+        case openSettings = 101
+        case newNote = 102
+        case openFile = 103
         case quit = 199
     }
     
@@ -313,6 +309,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     private var noteEditorExternalChangePromptActive = false
     private var noteEditorAutosaveWorkItem: DispatchWorkItem?
     private var noteEditorMarkdownPreviewVisible = false
+    private var noteEditorHistoryPaneVisible = false
     private var noteEditorShouldCommitExternalDraft = false
     private var noteEditorIsOrphanedCodexDraft = false
     private var noteEditorCodexSessionID: String?
@@ -338,9 +335,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     private var anchorDebugHideTask: DispatchWorkItem?
     private var lastAnchorPoint: NSPoint?
     private var pendingAnchorDebugCandidates: [AnchorDebugCandidate] = []
+    private let storePaths = ClipboardStorePaths.default()
     private let settingsStore: AppSettingsStore = UserDefaultsAppSettingsStore()
     private let standaloneNoteSaveStatus = EditorSaveStatusState()
     private let externalEditorSaveStatus = EditorSaveStatusState()
+    private var fileLocalHistoryManager: FileLocalHistoryManager?
     @Published private(set) var settings = AppSettings.default
     @Published private(set) var panelHotKeyState: HotKeyRegistrationState = .notRegistered
     @Published private(set) var translationHotKeyState: HotKeyRegistrationState = .notRegistered
@@ -430,6 +429,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             || environment["XCTestBundlePath"] != nil
     }
 
+    static func shouldStartLocalHistoryServices(isRunningAutomatedTests: Bool) -> Bool {
+        !isRunningAutomatedTests
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
     }
@@ -469,7 +472,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         sharedContainer = getModelContainer()
         dataManager = ClipboardDataManager(
             modelContext: ModelContext(sharedContainer),
-            maxHistoryItems: settings.historyLimit
+            maxHistoryItems: settings.historyLimit,
+            storePaths: storePaths
         )
         clipboardController = ClipboardController(dataManager: dataManager)
         clipboardController.onExternalCapture = nil
@@ -480,10 +484,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         setupPanel()
         observeHelpRequests()
 
-        guard !Self.isRunningAutomatedTests else {
+        guard Self.shouldStartLocalHistoryServices(isRunningAutomatedTests: Self.isRunningAutomatedTests) else {
             return
         }
 
+        fileLocalHistoryManager = FileLocalHistoryManager(storePaths: storePaths)
+        applyLocalFileHistorySettings()
         requestAccessibilityPermissions()
         syncLaunchAtLoginState()
         setupStatusItem()
@@ -787,6 +793,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         noteEditorExternalChangePromptActive = false
         noteEditorAutosaveWorkItem = nil
         noteEditorMarkdownPreviewVisible = false
+        noteEditorHistoryPaneVisible = false
         noteEditorShouldCommitExternalDraft = false
         noteEditorIsOrphanedCodexDraft = false
         noteEditorCodexSessionID = nil
@@ -1514,15 +1521,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         toggleItem.tag = MenuTag.togglePanel.rawValue
         toggleItem.target = self
         statusMenu.addItem(toggleItem)
-        
-        let translateItem = NSMenuItem(
-            title: "Translate Current Context (\(HotKeyManager.displayString(for: translateHotKeyShortcut)))",
-            action: #selector(translateNowFromMenu),
-            keyEquivalent: ""
-        )
-        translateItem.tag = MenuTag.translateNow.rawValue
-        translateItem.target = self
-        statusMenu.addItem(translateItem)
 
         let newNoteItem = NSMenuItem(
             title: "New Note (\(HotKeyManager.displayString(for: settings.newNoteShortcut)))",
@@ -1533,41 +1531,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         newNoteItem.target = self
         statusMenu.addItem(newNoteItem)
 
-        let newMarkdownItem = NSMenuItem(
-            title: "New Markdown File…",
-            action: #selector(newMarkdownFileFromMenu),
+        let openFileItem = NSMenuItem(
+            title: "Open File…",
+            action: #selector(openFileFromMenu),
             keyEquivalent: ""
         )
-        newMarkdownItem.tag = MenuTag.newMarkdownFile.rawValue
-        newMarkdownItem.target = self
-        statusMenu.addItem(newMarkdownItem)
-
-        let newTextItem = NSMenuItem(
-            title: "New Text File…",
-            action: #selector(newTextFileFromMenu),
-            keyEquivalent: ""
-        )
-        newTextItem.tag = MenuTag.newTextFile.rawValue
-        newTextItem.target = self
-        statusMenu.addItem(newTextItem)
-
-        let openMarkdownItem = NSMenuItem(
-            title: "Open Markdown File…",
-            action: #selector(openMarkdownFileFromMenu),
-            keyEquivalent: ""
-        )
-        openMarkdownItem.tag = MenuTag.openMarkdownFile.rawValue
-        openMarkdownItem.target = self
-        statusMenu.addItem(openMarkdownItem)
-
-        let openTextItem = NSMenuItem(
-            title: "Open Text File…",
-            action: #selector(openTextFileFromMenu),
-            keyEquivalent: ""
-        )
-        openTextItem.tag = MenuTag.openTextFile.rawValue
-        openTextItem.target = self
-        statusMenu.addItem(openTextItem)
+        openFileItem.tag = MenuTag.openFile.rawValue
+        openFileItem.target = self
+        statusMenu.addItem(openFileItem)
 
         statusMenu.addItem(.separator())
         
@@ -2228,10 +2199,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     }
 
     private func restoreAccessoryActivationPolicyIfNeeded() {
-        guard noteEditorExternalFileURL == nil else { return }
-        guard !hasAnyClipboardWindowVisible else { return }
+        guard Self.shouldRestoreAccessoryActivationPolicy(
+            currentEditorHasFileURL: noteEditorExternalFileURL != nil,
+            hasAnyClipboardWindowVisible: hasAnyClipboardWindowVisible
+        ) else { return }
         NSApp.setActivationPolicy(.accessory)
         refreshGlobalHotKeysIfNeeded()
+    }
+
+    static func shouldRestoreAccessoryActivationPolicy(
+        currentEditorHasFileURL: Bool,
+        hasAnyClipboardWindowVisible: Bool
+    ) -> Bool {
+        !currentEditorHasFileURL && !hasAnyClipboardWindowVisible
     }
 
     private func activateTargetApp(_ app: NSRunningApplication) {
@@ -2339,6 +2319,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
                     isOrphaned: false,
                     codexContext: nil
                 )
+                fileLocalHistoryManager?.registerOpenedFile(standardizedDestinationURL)
                 startExternalFileMonitorIfNeeded()
             }
         }
@@ -3505,13 +3486,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             settings.interfaceZoomScale = draft.clampedInterfaceZoomScale
             settings.newNoteReopenBehavior = draft.newNoteReopenBehavior
             settings.interfaceThemePreset = draft.interfaceThemePreset
+            settings.localFileHistoryEnabled = draft.localFileHistoryEnabled
+            settings.localFileHistoryTrackOpenedFiles = draft.localFileHistoryTrackOpenedFiles
+            settings.localFileHistoryWatchedDirectoryPath = draft.localFileHistoryWatchedDirectoryPath
+            settings.localFileHistoryWatchedExtensions = draft.localFileHistoryWatchedExtensions
+            settings.localFileHistoryWatchRecursively = draft.localFileHistoryWatchRecursively
+            settings.localFileHistoryMaxSnapshotsPerFile = max(1, draft.localFileHistoryMaxSnapshotsPerFile)
+            settings.localFileHistoryDeletedSourceBehavior = draft.localFileHistoryDeletedSourceBehavior
+            settings.localFileHistoryOrphanGracePeriodDays = max(1, draft.localFileHistoryOrphanGracePeriodDays)
+            settings.localFileHistoryConfirmDestructiveActions = draft.localFileHistoryConfirmDestructiveActions
         }
         dataManager?.updateMaxHistoryItems(sanitizedHistoryLimit)
 
         applyPanelShortcut(draft.panelShortcut)
         applyTranslationShortcut(draft.translationShortcut)
         saveSettings()
+        applyLocalFileHistorySettings()
         refreshVisibleWindowsAfterApplyingSettings(from: previousSettings, to: settings)
+    }
+
+    private func applyLocalFileHistorySettings() {
+        guard Self.shouldStartLocalHistoryServices(isRunningAutomatedTests: Self.isRunningAutomatedTests) else {
+            return
+        }
+        let manager = fileLocalHistoryManager ?? FileLocalHistoryManager(storePaths: storePaths)
+        fileLocalHistoryManager = manager
+        manager.apply(
+            settings: FileLocalHistoryManager.Settings(
+                isEnabled: settings.localFileHistoryEnabled,
+                trackOpenedFiles: settings.localFileHistoryTrackOpenedFiles,
+                watchedDirectoryPath: settings.localFileHistoryWatchedDirectoryPath,
+                watchedExtensions: settings.localFileHistoryWatchedExtensions,
+                watchDirectoryRecursively: settings.localFileHistoryWatchRecursively,
+                maxSnapshotsPerFile: settings.localFileHistoryMaxSnapshotsPerFile,
+                deletedSourceBehavior: settings.localFileHistoryDeletedSourceBehavior,
+                orphanGracePeriodDays: settings.localFileHistoryOrphanGracePeriodDays,
+                pollingInterval: FileLocalHistoryManager.Settings.default.pollingInterval
+            )
+        )
     }
 
     private func refreshVisibleWindowsAfterApplyingSettings(from previousSettings: AppSettings, to currentSettings: AppSettings) {
@@ -3545,6 +3557,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         let noteIsPlaceholderManualNote = noteEditorIsPlaceholderManualNote
         let noteCodexSessionID = noteEditorCodexSessionID
         let noteCodexProjectRootURL = noteEditorCodexProjectRootURL
+        let notePreviewVisible = noteEditorMarkdownPreviewVisible
+        let noteHistoryVisible = noteEditorHistoryPaneVisible
 
         if let itemID = standaloneItemID, standaloneNoteWasVisible {
             _ = dataManager.updateTextContent(standaloneDraft, for: itemID)
@@ -3615,7 +3629,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
                 controller = makeFileBackedEditorWindowController(
                     fileURL: noteExternalFileURL,
                     initialText: noteDraft,
-                    kind: fileKind
+                    kind: fileKind,
+                    initialPreviewVisible: notePreviewVisible,
+                    initialHistoryVisible: noteHistoryVisible
                 )
             } else {
                 guard let externalFileURL = noteExternalFileURL else { return }
@@ -3625,7 +3641,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
                     isOrphaned: noteIsOrphanedCodexDraft,
                     codexContext: noteCodexSessionID.map {
                         CodexDraftContext(sessionID: $0, projectRootURL: noteCodexProjectRootURL)
-                    }
+                    },
+                    initialPreviewVisible: notePreviewVisible
                 )
             }
             noteEditorLastPersistedText = noteLastPersistedText
@@ -3776,6 +3793,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             window.setFrame(desiredFrame, display: false)
         }
         controller.showWindow(nil)
+        controller.window?.orderFrontRegardless()
         controller.window?.makeKeyAndOrderFront(nil)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
             self?.suppressPanelAutoClose = false
@@ -3792,6 +3810,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
 
     private var isCurrentEditorFileBacked: Bool {
         currentFileBackedDocumentKind != nil
+    }
+
+    private var currentLocalHistoryFileURL: URL? {
+        guard isCurrentEditorFileBacked else {
+            return nil
+        }
+        return noteEditorExternalFileURL?.standardizedFileURL
     }
 
     private var noteEditorHasUnsavedFileChanges: Bool {
@@ -3831,17 +3856,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         return true
     }
 
-    private func openTextDocumentViaPanel(preferredKind: FileBackedDocumentKind) {
+    private func openTextDocumentViaPanel(preferredKind: FileBackedDocumentKind? = nil) {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         panel.resolvesAliases = true
-        panel.prompt = preferredKind == .markdown
-            ? uiText("Open Markdown", "Markdown を開く")
-            : uiText("Open Text", "テキストを開く")
-        if preferredKind == .markdown {
+        switch preferredKind {
+        case .markdown:
+            panel.prompt = uiText("Open Markdown", "Markdown を開く")
             panel.allowedFileTypes = ["md", "markdown", "mdown", "mkd"]
+        case .text:
+            panel.prompt = uiText("Open Text", "テキストを開く")
+        case nil:
+            panel.prompt = uiText("Open File", "ファイルを開く")
         }
 
         guard panel.runModal() == .OK, let fileURL = panel.url else {
@@ -3885,6 +3913,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             self.noteEditorCodexProjectRootURL = nil
 
             self.suppressPanelAutoClose = true
+            self.promoteAppForExternalEditorIfNeeded()
             self.activateCurrentApp()
             let controller = self.makeFileBackedEditorWindowController(
                 fileURL: nil,
@@ -4166,6 +4195,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
                         isOrphaned: false,
                         codexContext: nil
                     )
+                    fileLocalHistoryManager?.registerOpenedFile(standardizedDestinationURL)
                     startExternalFileMonitorIfNeeded()
                 }
             }
@@ -4289,6 +4319,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         let standardizedFileURL = fileURL.standardizedFileURL
         let preservedFrame = noteEditorWindowController?.window?.frame
         let draftText = noteEditorDraftText
+        let preservedPreviewVisible = noteEditorMarkdownPreviewVisible
 
         syncStandaloneNoteItemWithSavedFileTextIfNeeded(draftText)
         noteEditorAutosaveWorkItem?.cancel()
@@ -4302,7 +4333,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         let controller = makeFileBackedEditorWindowController(
             fileURL: standardizedFileURL,
             initialText: draftText,
-            kind: kind
+            kind: kind,
+            initialPreviewVisible: preservedPreviewVisible,
+            initialHistoryVisible: false
         )
         if let preservedFrame, let window = controller.window {
             window.setFrame(preservedFrame, display: false)
@@ -4329,6 +4362,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
                 self.dismissStandaloneManualNoteEditorWindow(copyToClipboard: false)
             }
             self.suppressPanelAutoClose = true
+            self.promoteAppForExternalEditorIfNeeded()
             NSApp.activate(ignoringOtherApps: true)
             let controller = self.makeNoteEditorWindowController(
                 itemID: itemID,
@@ -4507,6 +4541,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
            currentURL == standardizedURL,
            let window = noteEditorWindowController?.window,
            window.isVisible {
+            promoteAppForExternalEditorIfNeeded()
             activateCurrentApp()
             noteEditorWindowController?.showWindow(nil)
             window.orderFront(nil)
@@ -4528,6 +4563,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             self.noteEditorCodexProjectRootURL = nil
 
             self.suppressPanelAutoClose = true
+            self.promoteAppForExternalEditorIfNeeded()
             self.activateCurrentApp()
             let controller = self.makeFileBackedEditorWindowController(
                 fileURL: standardizedURL,
@@ -4565,6 +4601,142 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         settingsWindowController?.close()
         suppressPanelAutoClose = false
         registerHotKeys()
+    }
+
+    func revealLocalHistoryStorageRoot() {
+        guard fileLocalHistoryManager?.revealStorageRootInFinder() == true else {
+            presentLocalHistoryAlert(
+                title: uiText("Local history storage is unavailable", "ローカル履歴フォルダを開けませんでした"),
+                message: uiText(
+                    "ClipboardHistory could not open the local history storage directory.",
+                    "ローカル履歴の保存先ディレクトリを開けませんでした。"
+                )
+            )
+            return
+        }
+    }
+
+    func revealLocalHistoryForCurrentEditor() {
+        guard let fileURL = currentLocalHistoryFileURL else {
+            presentLocalHistoryAlert(
+                title: uiText("Save this file first", "先にファイルとして保存してください"),
+                message: uiText(
+                    "Local history is available after this editor is backed by a real file path.",
+                    "ローカル履歴は、このエディタが実ファイルに紐づいた後に利用できます。"
+                )
+            )
+            return
+        }
+
+        guard fileLocalHistoryManager?.revealHistoryInFinder(for: fileURL) == true else {
+            presentLocalHistoryAlert(
+                title: uiText("No local history yet", "まだローカル履歴がありません"),
+                message: uiText(
+                    "Open or save the file once, or enable directory watching in Settings, then try again.",
+                    "一度ファイルを開くか保存するか、設定でディレクトリ監視を有効にしてから再度実行してください。"
+                )
+            )
+            return
+        }
+    }
+
+    func currentEditorLocalHistoryEntries() -> [FileLocalHistoryManager.SnapshotEntry] {
+        guard let fileURL = currentLocalHistoryFileURL else {
+            return []
+        }
+
+        return (fileLocalHistoryManager?.historyEntries(for: fileURL) ?? [])
+            .sorted { lhs, rhs in
+                if lhs.createdAt == rhs.createdAt {
+                    return lhs.snapshotFileName > rhs.snapshotFileName
+                }
+                return lhs.createdAt > rhs.createdAt
+            }
+    }
+
+    func currentEditorLocalHistoryFileURLForUI() -> URL? {
+        currentLocalHistoryFileURL
+    }
+
+    func currentEditorLocalHistoryText(for entry: FileLocalHistoryManager.SnapshotEntry) -> String? {
+        guard let fileURL = currentLocalHistoryFileURL else {
+            return nil
+        }
+        return fileLocalHistoryManager?.snapshotText(for: entry, fileURL: fileURL)
+    }
+
+    func currentEditorLocalHistoryTrackingInfo() -> FileLocalHistoryManager.TrackingInfo? {
+        guard let fileURL = currentLocalHistoryFileURL else {
+            return nil
+        }
+        return fileLocalHistoryManager?.trackingInfo(for: fileURL)
+    }
+
+    @discardableResult
+    func deleteCurrentEditorLocalHistoryEntry(_ entry: FileLocalHistoryManager.SnapshotEntry) -> Bool {
+        guard let fileURL = currentLocalHistoryFileURL else {
+            return false
+        }
+
+        let timestamp = DateFormatter.localizedString(from: entry.createdAt, dateStyle: .medium, timeStyle: .short)
+        let confirmed = confirmLocalHistoryDestructiveAction(
+            title: uiText("Delete this snapshot?", "このスナップショットを削除しますか？"),
+            message: uiText(
+                "The snapshot from \(timestamp) will be removed from local history.",
+                "\(timestamp) のスナップショットをローカル履歴から削除します。"
+            ),
+            actionTitle: uiText("Delete Snapshot", "スナップショットを削除")
+        )
+        guard confirmed else {
+            return false
+        }
+
+        return fileLocalHistoryManager?.deleteSnapshot(entry, for: fileURL) == true
+    }
+
+    @discardableResult
+    func deleteAllCurrentEditorLocalHistory() -> Bool {
+        guard let fileURL = currentLocalHistoryFileURL else {
+            return false
+        }
+
+        let fileName = fileURL.lastPathComponent
+        let confirmed = confirmLocalHistoryDestructiveAction(
+            title: uiText("Delete all local history for this file?", "このファイルのローカル履歴をすべて削除しますか？"),
+            message: uiText(
+                "All stored snapshots for \(fileName) will be removed. Future edits can create new snapshots again while tracking remains enabled.",
+                "\(fileName) の保存済みスナップショットをすべて削除します。追跡が有効なままなら、今後の編集で新しいスナップショットは再び作成されます。"
+            ),
+            actionTitle: uiText("Delete All History", "履歴をすべて削除")
+        )
+        guard confirmed else {
+            return false
+        }
+
+        return fileLocalHistoryManager?.deleteHistory(for: fileURL) == true
+    }
+
+    private func presentLocalHistoryAlert(title: String, message: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    private func confirmLocalHistoryDestructiveAction(title: String, message: String, actionTitle: String) -> Bool {
+        guard settings.localFileHistoryConfirmDestructiveActions else {
+            return true
+        }
+
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: actionTitle)
+        alert.addButton(withTitle: uiText("Cancel", "キャンセル"))
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     private func makeSettingsWindowController() -> NSWindowController {
@@ -4785,7 +4957,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         fileURL: URL,
         initialText: String? = nil,
         isOrphaned: Bool = false,
-        codexContext: CodexDraftContext? = nil
+        codexContext: CodexDraftContext? = nil,
+        initialPreviewVisible: Bool? = nil
     ) -> NSWindowController {
         noteEditorItemID = nil
         noteEditorExternalFileURL = fileURL
@@ -4795,9 +4968,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         noteEditorIsOrphanedCodexDraft = isOrphaned
         noteEditorIsPlaceholderManualNote = false
         let resolvedInitialText = initialText ?? ((try? String(contentsOf: fileURL, encoding: .utf8)) ?? "")
+        let resolvedInitialPreviewVisible = initialPreviewVisible ?? true
         noteEditorDraftText = resolvedInitialText
         noteEditorLastPersistedText = resolvedInitialText
-        noteEditorMarkdownPreviewVisible = true
+        noteEditorMarkdownPreviewVisible = resolvedInitialPreviewVisible
+        noteEditorHistoryPaneVisible = false
         externalEditorSaveStatus.lastPersistedText = resolvedInitialText
         externalEditorSaveStatus.lastSaveDestination = nil
         externalEditorSaveStatus.saveRevision += 1
@@ -4808,7 +4983,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             saveStatusState: externalEditorSaveStatus,
             codexContext: codexContext,
             commitMode: isOrphaned ? .orphanedCodex : .returnToCodex,
-            initialMarkdownPreviewVisible: true,
+            initialMarkdownPreviewVisible: resolvedInitialPreviewVisible,
             onDraftChange: { [weak self] text in
                 self?.noteEditorDraftText = text
             },
@@ -4830,6 +5005,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             },
             onMarkdownPreviewVisibilityChanged: { [weak self] isVisible in
                 self?.noteEditorMarkdownPreviewVisible = isVisible
+            },
+            onHistoryPaneVisibilityChanged: { [weak self] isVisible in
+                self?.noteEditorHistoryPaneVisible = isVisible
             },
             onDiscardOrphanCodex: isOrphaned ? { [weak self] in
                 self?.discardOrphanedCodexDraft()
@@ -4857,8 +5035,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     private func makeFileBackedEditorWindowController(
         fileURL: URL?,
         initialText: String,
-        kind: FileBackedDocumentKind
+        kind: FileBackedDocumentKind,
+        initialPreviewVisible: Bool? = nil,
+        initialHistoryVisible: Bool = false
     ) -> NSWindowController {
+        if let fileURL {
+            fileLocalHistoryManager?.registerOpenedFile(fileURL.standardizedFileURL)
+        }
+        let resolvedInitialPreviewVisible = initialPreviewVisible ?? kind.supportsMarkdownPreview
         noteEditorItemID = nil
         noteEditorExternalFileURL = fileURL
         noteEditorExternalMode = .fileBacked(kind)
@@ -4871,7 +5055,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         noteEditorCodexProjectRootURL = nil
         noteEditorDraftText = initialText
         noteEditorLastPersistedText = initialText
-        noteEditorMarkdownPreviewVisible = kind.supportsMarkdownPreview
+        noteEditorMarkdownPreviewVisible = resolvedInitialPreviewVisible
+        noteEditorHistoryPaneVisible = initialHistoryVisible
         externalEditorSaveStatus.lastPersistedText = initialText
         externalEditorSaveStatus.lastSaveDestination = fileURL == nil ? nil : .file
         externalEditorSaveStatus.saveRevision += 1
@@ -4884,7 +5069,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             saveStatusState: externalEditorSaveStatus,
             codexContext: nil,
             commitMode: kind == .markdown ? .fileBackedMarkdown : .fileBackedText,
-            initialMarkdownPreviewVisible: kind.supportsMarkdownPreview,
+            initialMarkdownPreviewVisible: resolvedInitialPreviewVisible,
+            initialHistoryVisible: initialHistoryVisible,
             onDraftChange: { [weak self] text in
                 self?.noteEditorDraftText = text
             },
@@ -4900,6 +5086,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             },
             onMarkdownPreviewVisibilityChanged: { [weak self] isVisible in
                 self?.noteEditorMarkdownPreviewVisible = isVisible
+            },
+            onHistoryPaneVisibilityChanged: { [weak self] isVisible in
+                self?.noteEditorHistoryPaneVisible = isVisible
             },
             onDiscardOrphanCodex: nil
         )
@@ -5110,6 +5299,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         noteEditorDraftText = ""
         noteEditorLastPersistedText = ""
         noteEditorMarkdownPreviewVisible = false
+        noteEditorHistoryPaneVisible = false
         externalEditorSaveStatus.lastPersistedText = ""
         externalEditorSaveStatus.lastSaveDestination = nil
         externalEditorSaveStatus.saveRevision += 1
@@ -5349,7 +5539,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         noteEditorSessionStateURL = nil
         noteEditorShouldCommitExternalDraft = false
         noteEditorIsOrphanedCodexDraft = true
+        noteEditorHistoryPaneVisible = false
         let codexContext = currentCodexDraftContext()
+        let preservedPreviewVisibility = noteEditorMarkdownPreviewVisible
 
         let hostingController = NSHostingController(
             rootView: AnyView(
@@ -5359,7 +5551,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
                     saveStatusState: externalEditorSaveStatus,
                     codexContext: codexContext,
                     commitMode: .orphanedCodex,
-                    initialMarkdownPreviewVisible: true,
+                    initialMarkdownPreviewVisible: preservedPreviewVisibility,
                     onDraftChange: { [weak self] text in
                         self?.noteEditorDraftText = text
                     },
@@ -5377,6 +5569,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
                     },
                     onMarkdownPreviewVisibilityChanged: { [weak self] isVisible in
                         self?.noteEditorMarkdownPreviewVisible = isVisible
+                    },
+                    onHistoryPaneVisibilityChanged: { [weak self] isVisible in
+                        self?.noteEditorHistoryPaneVisible = isVisible
                     },
                     onDiscardOrphanCodex: { [weak self] in
                         self?.discardOrphanedCodexDraft()
@@ -5401,6 +5596,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
                 withIntermediateDirectories: true
             )
             try text.write(to: fileURL, atomically: true, encoding: .utf8)
+            fileLocalHistoryManager?.captureNowIfNeeded(for: fileURL.standardizedFileURL)
             return true
         } catch {
             return false
@@ -5570,6 +5766,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             isOrphaned: false,
             codexContext: nil
         )
+        let preservedPreviewVisibility = noteEditorMarkdownPreviewVisible
+        let preservedHistoryVisibility = noteEditorHistoryPaneVisible
 
         if let window = noteEditorWindowController?.window {
             window.contentViewController = NSHostingController(
@@ -5580,7 +5778,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
                         saveStatusState: externalEditorSaveStatus,
                         codexContext: nil,
                         commitMode: currentFileBackedDocumentKind == .markdown ? .fileBackedMarkdown : .fileBackedText,
-                        initialMarkdownPreviewVisible: currentFileBackedDocumentKind?.supportsMarkdownPreview == true,
+                        initialMarkdownPreviewVisible: preservedPreviewVisibility,
+                        initialHistoryVisible: preservedHistoryVisibility,
                         onDraftChange: { [weak self] updatedText in
                             self?.noteEditorDraftText = updatedText
                         },
@@ -5596,6 +5795,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
                         },
                         onMarkdownPreviewVisibilityChanged: { [weak self] isVisible in
                             self?.noteEditorMarkdownPreviewVisible = isVisible
+                        },
+                        onHistoryPaneVisibilityChanged: { [weak self] isVisible in
+                            self?.noteEditorHistoryPaneVisible = isVisible
                         },
                         onDiscardOrphanCodex: nil
                     )
@@ -5902,6 +6104,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     @objc
     private func openTextFileFromMenu() {
         openTextDocumentViaPanel(preferredKind: .text)
+    }
+
+    @objc
+    private func openFileFromMenu() {
+        openTextDocumentViaPanel()
     }
     
     @objc

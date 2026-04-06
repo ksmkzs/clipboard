@@ -25,6 +25,14 @@ struct ClipboardHistoryApp: App {
         Settings {
             SettingsView(appDelegate: appDelegate)
         }
-            .modelContainer(container)
+        .modelContainer(container)
+        .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") {
+                    appDelegate.openSettingsWindow()
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
+        }
     }
 }

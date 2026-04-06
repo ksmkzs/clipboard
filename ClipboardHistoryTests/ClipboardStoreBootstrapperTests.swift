@@ -20,6 +20,7 @@ final class ClipboardStoreBootstrapperTests: XCTestCase {
             imageDirectory: base.appendingPathComponent("Images", isDirectory: true),
             largeTextDirectory: base.appendingPathComponent("LargeText", isDirectory: true),
             noteDraftDirectory: base.appendingPathComponent("Notes", isDirectory: true),
+            localHistoryDirectory: base.appendingPathComponent("LocalHistory", isDirectory: true),
             codexIntegrationDirectory: base.appendingPathComponent(".clipboardhistory/bin", isDirectory: true),
             codexCompletionDirectory: base.appendingPathComponent("Codex/Sessions", isDirectory: true),
             codexSessionStateDirectory: base.appendingPathComponent("Codex/State", isDirectory: true),

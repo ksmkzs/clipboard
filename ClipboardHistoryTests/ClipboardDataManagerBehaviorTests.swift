@@ -12,6 +12,7 @@ final class ClipboardDataManagerBehaviorTests: XCTestCase {
     private var userDefaultsSuiteName: String!
     private var imageFilesToDelete: [URL] = []
     private var textFilesToDelete: [URL] = []
+    private var originalGeneralPasteboardString: String?
 
     override func setUpWithError() throws {
         let schema = Schema([ClipboardItem.self])
@@ -23,6 +24,7 @@ final class ClipboardDataManagerBehaviorTests: XCTestCase {
         userDefaults = UserDefaults(suiteName: suiteName)
         userDefaults.removePersistentDomain(forName: suiteName)
         dataManager = ClipboardDataManager(modelContext: modelContext, maxHistoryItems: 2, userDefaults: userDefaults)
+        originalGeneralPasteboardString = NSPasteboard.general.string(forType: .string)
     }
 
     override func tearDownWithError() throws {
@@ -37,6 +39,12 @@ final class ClipboardDataManagerBehaviorTests: XCTestCase {
         if let suiteName = userDefaultsSuiteName {
             userDefaults.removePersistentDomain(forName: suiteName)
         }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        if let originalGeneralPasteboardString {
+            pasteboard.setString(originalGeneralPasteboardString, forType: .string)
+        }
+        originalGeneralPasteboardString = nil
         userDefaults = nil
         userDefaultsSuiteName = nil
         dataManager = nil
@@ -221,6 +229,51 @@ final class ClipboardDataManagerBehaviorTests: XCTestCase {
         }
     }
 
+    func testClipboardControllerSyncNowCapturesGeneralPasteboardText() throws {
+        let controller = ClipboardController(
+            dataManager: dataManager,
+            pollingInterval: 0.01,
+            copyCapturePollingInterval: 0.005,
+            copyCaptureTimeout: 0.2
+        )
+        let text = "sync-now-\(UUID().uuidString)"
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.setString(text, forType: .string))
+
+        controller.syncNow()
+        flushScheduledSave()
+
+        XCTAssertEqual(dataManager.historyItems().first?.textContent, text)
+    }
+
+    func testClipboardControllerPollingCapturesClipboardChangesWithoutKeyboardEvent() throws {
+        var controller: ClipboardController? = ClipboardController(
+            dataManager: dataManager,
+            pollingInterval: 0.01,
+            copyCapturePollingInterval: 0.005,
+            copyCaptureTimeout: 0.2
+        )
+        controller?.shouldHandleKeyboardCopyEvent = { false }
+        controller?.startMonitoring()
+
+        let text = "polled-copy-\(UUID().uuidString)"
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.setString(text, forType: .string))
+
+        let expectation = expectation(description: "clipboard capture")
+        let deadline = Date().addingTimeInterval(1.0)
+        pollUntil(deadline: deadline) {
+            self.dataManager.historyItems().first?.textContent == text
+        } onSuccess: {
+            expectation.fulfill()
+        }
+
+        wait(for: [expectation], timeout: 1.2)
+        controller = nil
+    }
+
     func testRestoreDeletedLargeTextRestoresRawTextAndStorageFile() throws {
         let largeText = String(repeating: "abc123XYZ\n", count: 30_000)
         dataManager.storeCapture(.init(payload: .text(largeText), dedupeKey: ClipboardDedupeKey.text(largeText)))
@@ -315,6 +368,18 @@ final class ClipboardDataManagerBehaviorTests: XCTestCase {
 
     private func flushScheduledSave() {
         RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+    }
+
+    private func pollUntil(deadline: Date, condition: @escaping () -> Bool, onSuccess: @escaping () -> Void) {
+        if condition() {
+            onSuccess()
+            return
+        }
+        guard Date() < deadline else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { [weak self] in
+            guard self != nil else { return }
+            self?.pollUntil(deadline: deadline, condition: condition, onSuccess: onSuccess)
+        }
     }
 
     private func imageStoreDirectory() -> URL {

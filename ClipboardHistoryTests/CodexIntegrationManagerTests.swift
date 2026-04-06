@@ -23,6 +23,7 @@ final class CodexIntegrationManagerTests: XCTestCase {
             imageDirectory: supportDirectory.appendingPathComponent("ClipboardHistoryApp/Images", isDirectory: true),
             largeTextDirectory: supportDirectory.appendingPathComponent("ClipboardHistory/LargeText", isDirectory: true),
             noteDraftDirectory: supportDirectory.appendingPathComponent("ClipboardHistory/Notes", isDirectory: true),
+            localHistoryDirectory: supportDirectory.appendingPathComponent("ClipboardHistory/LocalHistory", isDirectory: true),
             codexIntegrationDirectory: homeDirectory.appendingPathComponent(".clipboardhistory/bin", isDirectory: true),
             codexCompletionDirectory: supportDirectory.appendingPathComponent("ClipboardHistory/Codex/Sessions", isDirectory: true),
             codexSessionStateDirectory: supportDirectory.appendingPathComponent("ClipboardHistory/Codex/State", isDirectory: true),
@@ -71,6 +72,27 @@ final class CodexIntegrationManagerTests: XCTestCase {
         }
     }
 
+    func testInstallUpdatesExistingManagedBlockInPlace() throws {
+        try "# existing alias\nalias ll='ls -l'\n".write(to: shellConfigURL, atomically: true, encoding: .utf8)
+
+        let manager = makeManager()
+        _ = try manager.install()
+
+        let originalContent = try String(contentsOf: shellConfigURL, encoding: .utf8)
+        let originalManagedBlockCount = originalContent.components(separatedBy: CodexIntegrationManager.managedBlockStart).count - 1
+        XCTAssertEqual(originalManagedBlockCount, 1)
+
+        try "updated helper body".write(to: storePaths.codexHelperScriptURL, atomically: true, encoding: .utf8)
+
+        let status = try manager.install()
+        let updatedContent = try String(contentsOf: shellConfigURL, encoding: .utf8)
+        let updatedManagedBlockCount = updatedContent.components(separatedBy: CodexIntegrationManager.managedBlockStart).count - 1
+
+        XCTAssertEqual(updatedManagedBlockCount, 1)
+        XCTAssertEqual(status.shellConfigured, true)
+        XCTAssertTrue(updatedContent.contains("export EDITOR='"))
+    }
+
     func testRemoveWithoutManagedBlockLeavesShellConfigUntouched() throws {
         let original = "export PATH=\"$HOME/bin:$PATH\"\n"
         try original.write(to: shellConfigURL, atomically: true, encoding: .utf8)
@@ -80,6 +102,21 @@ final class CodexIntegrationManagerTests: XCTestCase {
 
         let shellContent = try String(contentsOf: shellConfigURL, encoding: .utf8)
         XCTAssertEqual(shellContent, original)
+        XCTAssertEqual(status.shellConfigured, false)
+        XCTAssertEqual(status.unmanagedShellExportsDetected, false)
+    }
+
+    func testRemoveDeletesManagedBlockAndPreservesOtherShellContent() throws {
+        try "# existing alias\nalias ll='ls -l'\n".write(to: shellConfigURL, atomically: true, encoding: .utf8)
+
+        let manager = makeManager()
+        _ = try manager.install()
+
+        let status = try manager.remove()
+        let shellContent = try String(contentsOf: shellConfigURL, encoding: .utf8)
+
+        XCTAssertFalse(shellContent.contains(CodexIntegrationManager.managedBlockStart))
+        XCTAssertTrue(shellContent.contains("alias ll='ls -l'"))
         XCTAssertEqual(status.shellConfigured, false)
         XCTAssertEqual(status.unmanagedShellExportsDetected, false)
     }

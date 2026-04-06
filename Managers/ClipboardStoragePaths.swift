@@ -6,6 +6,7 @@ struct ClipboardStorePaths {
     let imageDirectory: URL
     let largeTextDirectory: URL
     let noteDraftDirectory: URL
+    let localHistoryDirectory: URL
     let codexIntegrationDirectory: URL
     let codexCompletionDirectory: URL
     let codexSessionStateDirectory: URL
@@ -20,6 +21,7 @@ struct ClipboardStorePaths {
         let imageDirectory = supportDirectory.appendingPathComponent("ClipboardHistoryApp/Images", isDirectory: true)
         let largeTextDirectory = storeDirectory.appendingPathComponent("LargeText", isDirectory: true)
         let noteDraftDirectory = storeDirectory.appendingPathComponent("Notes", isDirectory: true)
+        let localHistoryDirectory = storeDirectory.appendingPathComponent("LocalHistory", isDirectory: true)
         let codexIntegrationDirectory = homeDirectory.appendingPathComponent(".clipboardhistory/bin", isDirectory: true)
         let codexRequestDirectory = storeDirectory.appendingPathComponent("Codex", isDirectory: true)
         let codexCompletionDirectory = codexRequestDirectory.appendingPathComponent("Sessions", isDirectory: true)
@@ -32,6 +34,7 @@ struct ClipboardStorePaths {
             imageDirectory: imageDirectory,
             largeTextDirectory: largeTextDirectory,
             noteDraftDirectory: noteDraftDirectory,
+            localHistoryDirectory: localHistoryDirectory,
             codexIntegrationDirectory: codexIntegrationDirectory,
             codexCompletionDirectory: codexCompletionDirectory,
             codexSessionStateDirectory: codexSessionStateDirectory,
@@ -56,6 +59,10 @@ struct ClipboardStorePaths {
         )
         try fileManager.createDirectory(
             at: noteDraftDirectory,
+            withIntermediateDirectories: true
+        )
+        try fileManager.createDirectory(
+            at: localHistoryDirectory,
             withIntermediateDirectories: true
         )
         try fileManager.createDirectory(

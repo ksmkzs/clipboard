@@ -71,6 +71,10 @@ struct HistoryRowView: View {
         let currentWidth = markdownPreviewWidth > 0 ? markdownPreviewWidth : fallback
         return min(max(currentWidth, scaled(160)), scaled(420))
     }
+
+    private var inlineEditorHeight: CGFloat {
+        scaled(isCompact ? 108 : 140)
+    }
     
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -388,7 +392,14 @@ struct HistoryRowView: View {
             onResetZoom: onResetZoom,
             onSelectionChange: { _ in }
         )
-        .frame(maxWidth: .infinity, minHeight: scaled(isCompact ? 108 : 140), alignment: .topLeading)
+        // Keep inline editors at a fixed height so typing does not reflow the outer list
+        // and cause row-disappearance / parent-scroll jitter.
+        .frame(
+            maxWidth: .infinity,
+            minHeight: inlineEditorHeight,
+            maxHeight: inlineEditorHeight,
+            alignment: .topLeading
+        )
         .background(
             RoundedRectangle(cornerRadius: 8)
                 .fill(Color.black.opacity(0.07))
@@ -404,11 +415,12 @@ struct HistoryRowView: View {
             title: nil,
             markdown: editorText,
             width: markdownPreviewSidebarWidth,
-            minHeight: scaled(isCompact ? 108 : 140),
+            minHeight: inlineEditorHeight,
             fontScale: zoomScale,
             scrollProgress: nil,
             scrollRequestID: 0
         )
+        .frame(height: inlineEditorHeight, alignment: .top)
     }
 
     private func previewText(for text: String) -> String {

@@ -25,6 +25,7 @@
 - [x] 一文化も One Command
 - [x] 簡単操作で Markdown プレビュー
 - [x] `.md` / `.txt` / 拡張子不明の plain text を直接開いて編集
+- [x] 保存済み file と監視 directory 向けの local history
 - [x] そもそもコピーする文章が整形済み
 - [x] Codex CLI 連携で CLI に送る文章をいつものように作成できる
 
@@ -75,6 +76,18 @@
 Codex 連携を設定すると:
 
 - Codex CLI で `Ctrl+G` を押すだけで、現在の入力をこのウィンドウで編集できます
+
+### ローカル履歴
+
+保存済み file には、この Mac 上だけで保持する snapshot 履歴を付けられます。
+
+- snapshot があると editor に `Saved •N` pill が表示されます
+- history pane から現在の下書きとの差分を見て、その snapshot を下書きへ復元できます
+- 個別 snapshot の削除と、その file の local history 全削除ができます
+- tracking 対象は次のどちらでも構いません
+  - ClipboardHistory で開いた file
+  - watch 対象 directory 配下で、拡張子条件に一致する file
+- source file が消えた後の履歴は、orphan として残すか、猶予後に削除するかを選べます
 
 ---
 
@@ -192,6 +205,7 @@ Settings では主に以下を設定できます。
 - グローバルショートカット
 - 標準ウィンドウのショートカット
 - 編集ウィンドウのショートカット
+- ローカル履歴の tracking / 保持ポリシー
 - グローバル特殊コピーの on / off
 - テーマ
 - UI ズーム
@@ -237,6 +251,27 @@ Settings ではプレビューを見ながら切り替えられます。
 ```zsh
 xcodebuild -project ClipboardHistory.xcodeproj -scheme ClipboardHistory -configuration Debug build
 ```
+
+---
+
+## 検証
+
+- 自動テストを全体で通す:
+
+```zsh
+xcodebuild test -project ClipboardHistory.xcodeproj -scheme ClipboardHistory -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=''
+```
+
+- smoke / hybrid を含む検証入口:
+
+```zsh
+./ClipboardHistoryTests/run_validation_suite.sh
+```
+
+- 手動確認に使う補助文書:
+  - [local history debug file](./docs/local-history-debug.md)
+  - [Markdown preview stress test](./docs/markdown-preview-stress-test.md)
+  - [検証マトリクス](./docs/validation-matrix.ja.md)
 
 ---
 

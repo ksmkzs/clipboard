@@ -183,6 +183,38 @@ final class PanelKeyboardRoutingTests: XCTestCase {
         XCTAssertFalse(didCopyNormalized)
     }
 
+    func testEditorActiveDoesNotInterceptPlainCommandC() {
+        let view = CustomKeyView(frame: .init(x: 0, y: 0, width: 240, height: 120))
+        var didCopyRaw = false
+        view.isEditorActive = true
+        view.onCopyCommand = {
+            didCopyRaw = true
+        }
+
+        let handled = view.performKeyEquivalent(
+            with: keyEvent(keyCode: Int(kVK_ANSI_C), characters: "c", modifiers: .command)
+        )
+
+        XCTAssertFalse(handled)
+        XCTAssertFalse(didCopyRaw)
+    }
+
+    func testPanelReclaimsFirstResponderFromNonEditablePreviewTextView() {
+        let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 240, height: 120), styleMask: [.titled], backing: .buffered, defer: false)
+        let preview = NSTextView(frame: .init(x: 0, y: 0, width: 120, height: 60))
+        preview.isEditable = false
+
+        XCTAssertTrue(CustomKeyView.shouldReclaimPanelFirstResponder(from: preview, in: window))
+    }
+
+    func testPanelDoesNotStealFirstResponderFromEditableTextView() {
+        let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 240, height: 120), styleMask: [.titled], backing: .buffered, defer: false)
+        let editor = NSTextView(frame: .init(x: 0, y: 0, width: 120, height: 60))
+        editor.isEditable = true
+
+        XCTAssertFalse(CustomKeyView.shouldReclaimPanelFirstResponder(from: editor, in: window))
+    }
+
     func testCommandEqualsCallsZoomInHandler() {
         let view = CustomKeyView(frame: .init(x: 0, y: 0, width: 240, height: 120))
         var didZoom = false
@@ -283,8 +315,8 @@ final class ClipboardHelpCatalogTests: XCTestCase {
         XCTAssertTrue(titles.contains("Pin selected item"))
         XCTAssertTrue(titles.contains("Delete selected item"))
         XCTAssertTrue(titles.contains("Show or hide pinned items"))
-        XCTAssertTrue(titles.contains("Normalize whitespace on selected item"))
-        XCTAssertTrue(titles.contains("Join selected item into one sentence"))
+        XCTAssertTrue(titles.contains("Normalize the focused item"))
+        XCTAssertTrue(titles.contains("Turn the focused item into one line"))
     }
 
     func testEditorHelpCatalogIncludesPrimaryEditorActions() {
@@ -317,9 +349,37 @@ final class ClipboardHelpCatalogTests: XCTestCase {
         var japanese = english
         japanese.settingsLanguage = .japanese
 
-        XCTAssertTrue(ClipboardHelpCatalog.panelCommands(settings: english).contains(where: { $0.title == "Normalize whitespace on selected item" }))
-        XCTAssertTrue(ClipboardHelpCatalog.panelCommands(settings: japanese).contains(where: { $0.title == "選択中の項目の空白を整形" }))
+        XCTAssertTrue(ClipboardHelpCatalog.panelCommands(settings: english).contains(where: { $0.title == "Normalize the focused item" }))
+        XCTAssertTrue(ClipboardHelpCatalog.panelCommands(settings: japanese).contains(where: { $0.title == "フォーカス中の項目を整形" }))
         XCTAssertTrue(ClipboardHelpCatalog.editorCommands(settings: japanese).contains(where: { $0.title.contains("取り消し") }))
+    }
+}
+
+final class KeyboardOverrideContractTests: XCTestCase {
+    func testUIComponentsDoesNotReintroduceRemovedPreviewCopyAndLocalMonitorOverrides() throws {
+        let source = try String(contentsOf: uiComponentsURL(), encoding: .utf8)
+
+        XCTAssertFalse(source.contains("SelectableMarkdownWebView"))
+        XCTAssertFalse(source.contains("copyTextHandler"))
+        XCTAssertFalse(source.contains("NSEvent.addLocalMonitorForEvents"))
+    }
+
+    func testEditorTextViewDoesNotOverrideNativeCommandArrowOrWordNavigation() throws {
+        let source = try String(contentsOf: uiComponentsURL(), encoding: .utf8)
+
+        XCTAssertFalse(source.contains("moveToBeginningOfLine(nil)"))
+        XCTAssertFalse(source.contains("moveToEndOfLine(nil)"))
+        XCTAssertFalse(source.contains("deleteToBeginningOfLine(nil)"))
+        XCTAssertFalse(source.contains("moveWordLeft(nil)"))
+        XCTAssertFalse(source.contains("moveWordRight(nil)"))
+        XCTAssertFalse(source.contains("deleteWordBackward(nil)"))
+    }
+
+    private func uiComponentsURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Views/UIComponents.swift")
     }
 }
 
@@ -338,6 +398,11 @@ final class AppSettingsStoreTests: XCTestCase {
         XCTAssertEqual(loaded.orphanCodexDiscardShortcut, AppSettings.defaultOrphanCodexDiscardShortcut)
         XCTAssertTrue(loaded.globalCopyJoinedEnabled)
         XCTAssertTrue(loaded.globalCopyNormalizedEnabled)
+        XCTAssertTrue(loaded.localFileHistoryEnabled)
+        XCTAssertTrue(loaded.localFileHistoryTrackOpenedFiles)
+        XCTAssertEqual(loaded.localFileHistoryWatchedExtensions, "txt,md,markdown")
+        XCTAssertTrue(loaded.localFileHistoryWatchRecursively)
+        XCTAssertEqual(loaded.localFileHistoryMaxSnapshotsPerFile, 30)
 
         defaults.removePersistentDomain(forName: suiteName)
     }
@@ -379,6 +444,12 @@ final class AppSettingsStoreTests: XCTestCase {
             keyCode: UInt32(kVK_ANSI_Backslash),
             modifiers: UInt32(cmdKey | shiftKey)
         )
+        settings.localFileHistoryEnabled = true
+        settings.localFileHistoryTrackOpenedFiles = false
+        settings.localFileHistoryWatchedDirectoryPath = "/tmp/watched"
+        settings.localFileHistoryWatchedExtensions = "txt,md,log"
+        settings.localFileHistoryWatchRecursively = false
+        settings.localFileHistoryMaxSnapshotsPerFile = 55
 
         store.save(settings)
         let loaded = store.load()
@@ -392,6 +463,12 @@ final class AppSettingsStoreTests: XCTestCase {
         XCTAssertEqual(loaded.orphanCodexDiscardShortcut, settings.orphanCodexDiscardShortcut)
         XCTAssertFalse(loaded.globalCopyJoinedEnabled)
         XCTAssertFalse(loaded.globalCopyNormalizedEnabled)
+        XCTAssertTrue(loaded.localFileHistoryEnabled)
+        XCTAssertFalse(loaded.localFileHistoryTrackOpenedFiles)
+        XCTAssertEqual(loaded.localFileHistoryWatchedDirectoryPath, "/tmp/watched")
+        XCTAssertEqual(loaded.localFileHistoryWatchedExtensions, "txt,md,log")
+        XCTAssertFalse(loaded.localFileHistoryWatchRecursively)
+        XCTAssertEqual(loaded.localFileHistoryMaxSnapshotsPerFile, 55)
 
         defaults.removePersistentDomain(forName: suiteName)
     }

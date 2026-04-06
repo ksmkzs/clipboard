@@ -297,6 +297,10 @@
             <p>text item は editor mode で開き、undo / redo、行移動、indent、join、normalize ができます。</p>
           </article>
           <article class="feature-card">
+            <strong>file の snapshot も近くに置く</strong>
+            <p>保存済み Markdown / text file には local history を付けられます。editor を離れずに差分確認と復元ができます。</p>
+          </article>
+          <article class="feature-card">
             <strong>ローカル完結で使う</strong>
             <p>アカウントも同期も不要です。1 台の Mac 上で軽く回すことを優先しています。</p>
           </article>
@@ -318,6 +322,7 @@
           <ul>
             <li>macOS 14 以降に対応しています。</li>
             <li>テキストと画像の clipboard history に対応しています。</li>
+            <li>local file history は opened file または watched folder を対象にできます。</li>
             <li>通常は Universal build が推奨です。</li>
             <li>checksum は各 release の <code>SHA256SUMS.txt</code> にあります。</li>
           </ul>
@@ -328,6 +333,9 @@
             source、issue、release 情報、変更履歴は
             <a href="https://github.com/ksmkzs/clipboard">GitHub</a>
             で公開しています。
+          </p>
+          <p style="margin-top: 10px;">
+            検証補助と手動確認用の文書は repository の <code>docs/</code> と <code>ClipboardHistoryTests/</code> にあります。
           </p>
         </article>
       </section>

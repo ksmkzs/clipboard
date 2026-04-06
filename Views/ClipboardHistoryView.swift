@@ -6,6 +6,7 @@
 //
 import SwiftUI
 import UniformTypeIdentifiers
+import CryptoKit
 
 struct ClipboardHistoryView: View {
     private static let pinnedRowSpacing: CGFloat = 8
@@ -1666,9 +1667,25 @@ struct StandaloneNoteEditorView: View {
         case fileBackedText
     }
 
+    private enum RightPaneMode {
+        case none
+        case preview
+        case history
+    }
+
+    struct LocalHistoryEntryBadge {
+        let title: String
+        let tint: Color
+    }
+
     private static let markdownPreviewSidebarWidth: CGFloat = 260
     private static let markdownPreviewSidebarMinWidth: CGFloat = 180
     private static let markdownPreviewSidebarMaxWidth: CGFloat = 520
+    private static let initialHistorySummaryRequestLimit = 20
+    private static let localHistoryComputationQueue = DispatchQueue(
+        label: "ClipboardHistory.StandaloneNoteEditorView.LocalHistoryComputation",
+        qos: .userInitiated
+    )
 
     let initialText: String
     @ObservedObject var appDelegate: AppDelegate
@@ -1676,18 +1693,66 @@ struct StandaloneNoteEditorView: View {
     let codexContext: AppDelegate.CodexDraftContext?
     let commitMode: CommitMode
     let initialMarkdownPreviewVisible: Bool
+    let initialHistoryVisible: Bool
     let onDraftChange: (String) -> Void
     let onCommit: (String) -> Void
     let onSave: () -> Void
     let onSaveAs: () -> Void
     let onClose: () -> Void
     let onMarkdownPreviewVisibilityChanged: (Bool) -> Void
+    let onHistoryPaneVisibilityChanged: (Bool) -> Void
     let onDiscardOrphanCodex: (() -> Void)?
+
+    init(
+        initialText: String,
+        appDelegate: AppDelegate,
+        saveStatusState: AppDelegate.EditorSaveStatusState,
+        codexContext: AppDelegate.CodexDraftContext?,
+        commitMode: CommitMode,
+        initialMarkdownPreviewVisible: Bool,
+        initialHistoryVisible: Bool = false,
+        onDraftChange: @escaping (String) -> Void,
+        onCommit: @escaping (String) -> Void,
+        onSave: @escaping () -> Void,
+        onSaveAs: @escaping () -> Void,
+        onClose: @escaping () -> Void,
+        onMarkdownPreviewVisibilityChanged: @escaping (Bool) -> Void,
+        onHistoryPaneVisibilityChanged: @escaping (Bool) -> Void = { _ in },
+        onDiscardOrphanCodex: (() -> Void)?
+    ) {
+        self.initialText = initialText
+        self.appDelegate = appDelegate
+        self.saveStatusState = saveStatusState
+        self.codexContext = codexContext
+        self.commitMode = commitMode
+        self.initialMarkdownPreviewVisible = initialMarkdownPreviewVisible
+        self.initialHistoryVisible = initialHistoryVisible
+        self.onDraftChange = onDraftChange
+        self.onCommit = onCommit
+        self.onSave = onSave
+        self.onSaveAs = onSaveAs
+        self.onClose = onClose
+        self.onMarkdownPreviewVisibilityChanged = onMarkdownPreviewVisibilityChanged
+        self.onHistoryPaneVisibilityChanged = onHistoryPaneVisibilityChanged
+        self.onDiscardOrphanCodex = onDiscardOrphanCodex
+    }
 
     @State private var draftText = ""
     @State private var committedText = ""
-    @State private var isMarkdownPreviewVisible = false
+    @State private var rightPaneMode: RightPaneMode = .none
     @State private var markdownPreviewWidth: CGFloat = 0
+    @State private var historyEntries: [FileLocalHistoryManager.SnapshotEntry] = []
+    @State private var selectedHistoryEntryID: String?
+    @State private var historyDiffSummaries: [String: LocalHistoryDiffEngine.Summary] = [:]
+    @State private var selectedHistoryDiff: LocalHistoryDiffEngine.Result?
+    @State private var selectedHistoryDiffEntryID: String?
+    @State private var historySnapshotTextCache: [String: String] = [:]
+    @State private var pendingHistorySummaryEntryIDs: Set<String> = []
+    @State private var visibleHistoryEntryIDs: Set<String> = []
+    @State private var localHistoryTrackingInfoState: FileLocalHistoryManager.TrackingInfo?
+    @State private var currentDraftHashState = ""
+    @State private var lastPersistedHashState: String?
+    @State private var historyComputationRevision = 0
 
     private var zoomScale: CGFloat {
         CGFloat(appDelegate.settings.clampedInterfaceZoomScale)
@@ -1707,6 +1772,21 @@ struct StandaloneNoteEditorView: View {
 
     private var supportsMarkdownPreview: Bool {
         commitMode != .fileBackedText
+    }
+
+    private var supportsLocalHistory: Bool {
+        commitMode == .fileBackedMarkdown || commitMode == .fileBackedText
+    }
+
+    private var isRightPaneVisible: Bool {
+        switch rightPaneMode {
+        case .none:
+            return false
+        case .preview:
+            return supportsMarkdownPreview
+        case .history:
+            return supportsLocalHistory
+        }
     }
 
     private var isDirty: Bool {
@@ -1756,6 +1836,175 @@ struct StandaloneNoteEditorView: View {
         }
     }
 
+    private var historyAccentColor: Color {
+        Color(red: 0.18, green: 0.49, blue: 0.94)
+    }
+
+    private var localHistoryTrackingInfo: FileLocalHistoryManager.TrackingInfo? {
+        localHistoryTrackingInfoState
+    }
+
+    private var localHistoryStatusTitle: String {
+        if !appDelegate.settings.localFileHistoryEnabled {
+            return t("History Off", "履歴オフ")
+        }
+        if let info = localHistoryTrackingInfo, info.isTracked {
+            return t("Tracked", "追跡中")
+        }
+        return t("Untracked", "未追跡")
+    }
+
+    private var localHistoryStatusDetail: String {
+        if !appDelegate.settings.localFileHistoryEnabled {
+            return t("Disabled in Settings", "設定で無効")
+        }
+
+        switch commitMode {
+        case .fileBackedMarkdown, .fileBackedText:
+            guard let info = localHistoryTrackingInfo else {
+                return t("Save as file to track", "ファイル保存で追跡開始")
+            }
+            switch (info.isTrackedByOpenedFile, info.isTrackedByWatchedDirectory) {
+            case (true, true):
+                return t("Opened here + Watched", "このアプリ + 監視")
+            case (true, false):
+                return t("Opened here", "このアプリで開いた")
+            case (false, true):
+                return t("Watched directory", "監視ディレクトリ")
+            case (false, false):
+                if info.historyEntryCount > 0 {
+                    return t("Existing snapshots only", "既存履歴のみ")
+                }
+                return t("Outside tracked scope", "追跡対象外")
+            }
+        case .pasteToTarget, .returnToCodex, .orphanedCodex:
+            return t("Save as file to track", "ファイル保存で追跡開始")
+        }
+    }
+
+    private var localHistoryStatusColor: Color {
+        if !appDelegate.settings.localFileHistoryEnabled {
+            return theme.secondaryText
+        }
+        if localHistoryTrackingInfo?.isTracked == true {
+            return historyAccentColor
+        }
+        return Color(red: 0.80, green: 0.54, blue: 0.18)
+    }
+
+    private var localHistoryEmptyTitle: String {
+        if !appDelegate.settings.localFileHistoryEnabled {
+            return t("Local history is disabled", "ローカル履歴は無効です")
+        }
+        if localHistoryTrackingInfo?.isTracked == false {
+            return t("This file is currently untracked", "このファイルは現在未追跡です")
+        }
+        return t("No local history yet", "まだローカル履歴がありません")
+    }
+
+    private var localHistoryEmptyMessage: String {
+        if !appDelegate.settings.localFileHistoryEnabled {
+            return t(
+                "Enable file local history in Settings to start collecting snapshots.",
+                "設定でファイルのローカル履歴を有効にすると、スナップショットの収集が始まります。"
+            )
+        }
+        switch commitMode {
+        case .fileBackedMarkdown, .fileBackedText:
+            guard let info = localHistoryTrackingInfo else {
+                return t(
+                    "Save this document to a real file path to start collecting snapshots.",
+                    "この文書を実ファイルとして保存すると、スナップショットの収集が始まります。"
+                )
+            }
+            if info.isTracked {
+                return t(
+                    "This file is tracked. Save or reopen it once to create the first snapshot.",
+                    "このファイルは追跡対象です。一度保存するか再オープンすると最初のスナップショットが作成されます。"
+                )
+            }
+            return t(
+                "This file is outside the current tracking scope. Open it here with opened-file tracking enabled, or move it under the watched directory with a matching extension.",
+                "このファイルは現在の追跡対象外です。「ClipboardHistory で開いたファイルも追跡」を有効にするか、監視ディレクトリ配下の対象拡張子に置くと追跡されます。"
+            )
+        case .pasteToTarget, .returnToCodex, .orphanedCodex:
+            return t(
+                "Local history starts after this draft is saved as a real file.",
+                "ローカル履歴は、この下書きを実ファイルとして保存した後に始まります。"
+            )
+        }
+    }
+
+    private var rightPaneTitle: String {
+        switch rightPaneMode {
+        case .none:
+            return t("Local History", "ローカル履歴")
+        case .history:
+            if selectedHistoryEntry != nil {
+                return t("History Diff", "履歴差分")
+            }
+            return t("Local History", "ローカル履歴")
+        case .preview:
+            return t("Markdown Preview", "Markdown プレビュー")
+        }
+    }
+
+    private var rightPaneSummary: String {
+        switch rightPaneMode {
+        case .preview:
+            return t("Live preview of the current draft", "現在の下書きのライブプレビュー")
+        case .none:
+            if isDirty {
+                return t("Draft has unsaved changes", "下書きに未保存の変更があります")
+            }
+            return t("Latest saved snapshot matches the current draft", "最新の保存スナップショットが現在の下書きと一致しています")
+        case .history:
+            if let selectedHistoryEntry {
+                if resolvedSelectedHistoryDiff?.isUnavailable == true {
+                    return t("Snapshot content is unavailable", "スナップショット内容を読み込めませんでした")
+                }
+                let summary = resolvedSelectedHistoryDiff?.summary ?? historyDiffSummary(for: selectedHistoryEntry)
+                if let summary {
+                    return "\(Self.localizedTimestampFormatter.string(from: selectedHistoryEntry.createdAt))  +\(summary.additions) / -\(summary.removals)"
+                }
+                return Self.localizedTimestampFormatter.string(from: selectedHistoryEntry.createdAt)
+            }
+            if historyEntries.isEmpty {
+                return localHistoryStatusDetail
+            }
+            return t("Select a snapshot to open its diff", "スナップショットを選んで差分を開きます")
+        }
+    }
+
+    private static let localizedTimestampFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
+    private var selectedHistoryEntry: FileLocalHistoryManager.SnapshotEntry? {
+        guard let selectedHistoryEntryID else { return nil }
+        return historyEntries.first { $0.id == selectedHistoryEntryID }
+    }
+
+    private var resolvedSelectedHistoryDiff: LocalHistoryDiffEngine.Result? {
+        guard selectedHistoryDiffEntryID == selectedHistoryEntryID else { return nil }
+        return selectedHistoryDiff
+    }
+
+    private var isShowingHistoryDiff: Bool {
+        rightPaneMode == .history && selectedHistoryEntry != nil
+    }
+
+    private var currentDraftHash: String {
+        currentDraftHashState
+    }
+
+    private var lastPersistedHash: String? {
+        lastPersistedHashState
+    }
+
     private var resolvedMarkdownPreviewWidth: CGFloat {
         let fallback = scaled(Self.markdownPreviewSidebarWidth)
         let currentWidth = markdownPreviewWidth > 0 ? markdownPreviewWidth : fallback
@@ -1796,17 +2045,69 @@ struct StandaloneNoteEditorView: View {
         .animation(nil, value: appDelegate.settings.interfaceThemePreset.rawValue)
         .onAppear {
             loadCurrentText()
-            isMarkdownPreviewVisible = initialMarkdownPreviewVisible
-            onMarkdownPreviewVisibilityChanged(initialMarkdownPreviewVisible)
+            refreshLocalHistoryTrackingInfo()
+            refreshLocalHistorySelection(preserveSelection: false)
+            if initialHistoryVisible && supportsLocalHistory {
+                rightPaneMode = .history
+            } else {
+                rightPaneMode = initialMarkdownPreviewVisible && supportsMarkdownPreview ? .preview : .none
+            }
+            onMarkdownPreviewVisibilityChanged(rightPaneMode == .preview)
+            onHistoryPaneVisibilityChanged(rightPaneMode == .history)
             if markdownPreviewWidth == 0 {
                 markdownPreviewWidth = scaled(Self.markdownPreviewSidebarWidth)
             }
+            refreshLocalHistoryDiffState()
         }
         .onChange(of: draftText) { _, newValue in
             onDraftChange(newValue)
+            refreshLocalHistoryHashes()
+            guard rightPaneMode == .history else { return }
+            invalidateHistoryDiffWork(clearSnapshotCache: false)
+            if selectedHistoryEntryID != nil {
+                requestSelectedLocalHistoryDiff()
+            } else {
+                requestVisibleLocalHistorySummaries()
+            }
         }
-        .onChange(of: isMarkdownPreviewVisible) { _, newValue in
-            onMarkdownPreviewVisibilityChanged(newValue)
+        .onChange(of: rightPaneMode) { _, newValue in
+            if newValue == .history {
+                refreshLocalHistorySelection(preserveSelection: true)
+                refreshLocalHistoryDiffState()
+            } else {
+                clearLocalHistoryDiffState()
+            }
+            onMarkdownPreviewVisibilityChanged(newValue == .preview)
+            onHistoryPaneVisibilityChanged(newValue == .history)
+        }
+        .onChange(of: saveStatusState.saveRevision) { _, _ in
+            refreshLocalHistoryHashes()
+            refreshLocalHistoryTrackingInfo()
+            refreshLocalHistorySelection(preserveSelection: true)
+            if rightPaneMode == .history {
+                refreshLocalHistoryDiffState()
+            }
+        }
+        .onChange(of: appDelegate.settings) { _, _ in
+            guard supportsLocalHistory else { return }
+            refreshLocalHistoryTrackingInfo()
+            refreshLocalHistorySelection(preserveSelection: true)
+            if rightPaneMode == .history {
+                refreshLocalHistoryDiffState()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .fileLocalHistoryDidChange)) { notification in
+            guard supportsLocalHistory else { return }
+            if let changedFileURL = notification.userInfo?["fileURL"] as? URL,
+               let currentFileURL = appDelegate.currentEditorLocalHistoryFileURLForUI(),
+               changedFileURL.standardizedFileURL != currentFileURL.standardizedFileURL {
+                return
+            }
+            refreshLocalHistoryTrackingInfo()
+            refreshLocalHistorySelection(preserveSelection: true)
+            if rightPaneMode == .history {
+                refreshLocalHistoryDiffState()
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .editorViewValidationRequested)) { notification in
             guard let action = notification.userInfo?["action"] as? String else { return }
@@ -1925,16 +2226,8 @@ struct StandaloneNoteEditorView: View {
                 )
             }
             Spacer(minLength: 0)
-            HStack(spacing: 6) {
-                Image(systemName: saveStatusIcon)
-                    .font(.system(size: scaled(9), weight: .semibold))
-                Text(saveStatusText)
-                    .font(.system(size: scaled(10.5), weight: .semibold))
-            }
-            .foregroundStyle(saveStatusColor)
-            .padding(.horizontal, scaled(8))
-            .padding(.vertical, scaled(4))
-            .background(theme.hintFill)
+            localHistoryStatusPill
+            saveStatusPill
         }
     }
 
@@ -1993,19 +2286,217 @@ struct StandaloneNoteEditorView: View {
         }
     }
 
+    @ViewBuilder
+    private var localHistoryStatusPill: some View {
+        HStack(spacing: 6) {
+            Image(systemName: localHistoryTrackingInfo?.isTracked == true ? "clock.arrow.trianglehead.counterclockwise.rotate.90" : "clock.badge.xmark")
+                .font(.system(size: scaled(9), weight: .semibold))
+            Text(localHistoryStatusTitle)
+                .font(.system(size: scaled(10.5), weight: .semibold))
+            Text(localHistoryStatusDetail)
+                .font(.system(size: scaled(9.5), weight: .medium))
+                .foregroundStyle(theme.secondaryText)
+        }
+        .foregroundStyle(localHistoryStatusColor)
+        .padding(.horizontal, scaled(8))
+        .padding(.vertical, scaled(4))
+        .background(theme.hintFill)
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+    }
+
+    @ViewBuilder
+    private var saveStatusPill: some View {
+        let content = HStack(spacing: 8) {
+            Image(systemName: saveStatusIcon)
+                .font(.system(size: scaled(9), weight: .semibold))
+            Text(saveStatusText)
+                .font(.system(size: scaled(10.5), weight: .semibold))
+            if supportsLocalHistory {
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(historyAccentColor)
+                        .frame(width: scaled(5.5), height: scaled(5.5))
+                    Text("\(historyEntries.count)")
+                        .font(.system(size: scaled(10), weight: .semibold))
+                        .foregroundStyle(historyAccentColor)
+                }
+            }
+        }
+        .foregroundStyle(saveStatusColor)
+        .padding(.horizontal, scaled(8))
+        .padding(.vertical, scaled(4))
+        .background(theme.hintFill)
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(
+                    supportsLocalHistory && rightPaneMode == .history
+                        ? historyAccentColor.opacity(0.42)
+                        : Color.clear,
+                    lineWidth: 0.8
+                )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+
+        if supportsLocalHistory {
+            Button(action: toggleHistoryPane) {
+                content
+            }
+            .buttonStyle(.plain)
+        } else {
+            content
+        }
+    }
+
+    @ViewBuilder
+    private var rightPaneContent: some View {
+        switch rightPaneMode {
+        case .none:
+            EmptyView()
+        case .preview:
+            MarkdownPreviewSidebar(
+                title: nil,
+                markdown: draftText,
+                width: resolvedMarkdownPreviewWidth,
+                minHeight: scaled(180),
+                fontScale: zoomScale,
+                scrollProgress: nil,
+                scrollRequestID: 0
+            )
+        case .history:
+            LocalHistorySidebar(
+                entries: historyEntries,
+                selectedEntryID: selectedHistoryEntryID,
+                selectedDiff: resolvedSelectedHistoryDiff,
+                width: resolvedMarkdownPreviewWidth,
+                minHeight: scaled(180),
+                fontScale: zoomScale,
+                theme: theme,
+                emptyTitle: localHistoryEmptyTitle,
+                emptyMessage: localHistoryEmptyMessage,
+                openFolderLabel: t("Open Folder", "フォルダを開く"),
+                currentDraftLabel: t("Current Draft", "現在の下書き"),
+                diffIdenticalLabel: t("Selected snapshot matches the current draft.", "選択したスナップショットは現在の下書きと同一です。"),
+                diffLoadingLabel: t("Loading snapshot diff…", "差分を読み込み中…"),
+                diffUnavailableLabel: t("Snapshot content is unavailable.", "スナップショット内容を読み込めませんでした。"),
+                diffTruncatedLabel: t("This diff is too large to render inline. Restore it or open the history folder if needed.", "差分が大きいためインライン表示を省略しました。必要なら復元するか履歴フォルダを開いてください。"),
+                onSelectEntry: selectLocalHistoryEntry,
+                onOpenFolder: {
+                    appDelegate.revealLocalHistoryForCurrentEditor()
+                },
+                onAppearEntry: historyEntryDidAppear(_:),
+                onDisappearEntry: historyEntryDidDisappear(_:),
+                badgeProvider: historyBadge(for:),
+                diffSummaryProvider: historyDiffSummary(for:)
+            )
+        }
+    }
+
     private var editorBody: some View {
         VStack(alignment: .leading, spacing: 6) {
             if commitMode == .orphanedCodex {
                 orphanedCodexBanner
             }
 
-            if isMarkdownPreviewVisible && supportsMarkdownPreview {
-                HStack {
-                    Spacer(minLength: 0)
-                    Text(t("Markdown Preview", "Markdown プレビュー"))
+            if rightPaneMode == .history {
+                HStack(spacing: 10) {
+                    Text(rightPaneTitle)
                         .font(.system(size: scaled(11), weight: .semibold))
                         .foregroundStyle(.primary)
-                        .frame(width: resolvedMarkdownPreviewWidth, alignment: .leading)
+                        .lineLimit(1)
+
+                    Text(rightPaneSummary)
+                        .font(.system(size: scaled(9.5), weight: .medium))
+                        .foregroundStyle(theme.secondaryText)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+
+                    Spacer(minLength: 6)
+
+                    if isShowingHistoryDiff {
+                        Button {
+                            selectedHistoryEntryID = nil
+                            selectedHistoryDiff = nil
+                            selectedHistoryDiffEntryID = nil
+                            requestVisibleLocalHistorySummaries()
+                        } label: {
+                            Label(t("Back to List", "一覧へ戻る"), systemImage: "chevron.left")
+                                .font(.system(size: scaled(9.5), weight: .semibold))
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    if isShowingHistoryDiff {
+                        Button(role: .destructive) {
+                            deleteSelectedLocalHistoryEntry()
+                        } label: {
+                            Label(t("Delete Snapshot", "この履歴を削除"), systemImage: "trash")
+                                .font(.system(size: scaled(9.5), weight: .semibold))
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    Button {
+                        appDelegate.revealLocalHistoryForCurrentEditor()
+                    } label: {
+                        Label(t("Open Folder", "フォルダを開く"), systemImage: "folder")
+                            .font(.system(size: scaled(9.5), weight: .semibold))
+                    }
+                    .buttonStyle(.bordered)
+
+                    if isShowingHistoryDiff {
+                        Button {
+                            restoreSelectedLocalHistoryEntry()
+                        } label: {
+                            Label(t("Restore to Draft", "下書きへ復元"), systemImage: "arrow.uturn.backward")
+                                .font(.system(size: scaled(9.5), weight: .semibold))
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+
+                    if !historyEntries.isEmpty {
+                        Button(role: .destructive) {
+                            deleteAllLocalHistory()
+                        } label: {
+                            Label(t("Delete All", "履歴を全削除"), systemImage: "trash.slash")
+                                .font(.system(size: scaled(9.5), weight: .semibold))
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    Button {
+                        rightPaneMode = .none
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: scaled(11), weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            } else if isRightPaneVisible {
+                HStack {
+                    Spacer(minLength: 0)
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(rightPaneTitle)
+                                    .font(.system(size: scaled(11), weight: .semibold))
+                                    .foregroundStyle(.primary)
+                                Text(rightPaneSummary)
+                                    .font(.system(size: scaled(9.5), weight: .medium))
+                                    .foregroundStyle(theme.secondaryText)
+                            }
+                            Spacer(minLength: 6)
+                            Button {
+                                rightPaneMode = .none
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: scaled(11), weight: .semibold))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .frame(width: resolvedMarkdownPreviewWidth, alignment: .leading)
                 }
             }
 
@@ -2045,7 +2536,7 @@ struct StandaloneNoteEditorView: View {
                         .stroke(Color.white.opacity(0.22), lineWidth: 0.8)
                 )
 
-                if isMarkdownPreviewVisible && supportsMarkdownPreview {
+                if isRightPaneVisible {
                     MarkdownPreviewResizeHandle { delta in
                         markdownPreviewWidth = min(
                             max(resolvedMarkdownPreviewWidth - delta, scaled(Self.markdownPreviewSidebarMinWidth)),
@@ -2053,16 +2544,8 @@ struct StandaloneNoteEditorView: View {
                         )
                     }
 
-                    MarkdownPreviewSidebar(
-                        title: nil,
-                        markdown: draftText,
-                        width: resolvedMarkdownPreviewWidth,
-                        minHeight: scaled(180),
-                        fontScale: zoomScale,
-                        scrollProgress: nil,
-                        scrollRequestID: 0
-                    )
-                    .frame(maxHeight: .infinity, alignment: .top)
+                    rightPaneContent
+                        .frame(maxHeight: .infinity, alignment: .top)
                 }
             }
         }
@@ -2186,6 +2669,7 @@ struct StandaloneNoteEditorView: View {
         committedText = text
         draftText = text
         onDraftChange(text)
+        refreshLocalHistoryHashes()
     }
 
     private func commitDraft() {
@@ -2198,13 +2682,505 @@ struct StandaloneNoteEditorView: View {
         onClose()
     }
 
+    private func toggleHistoryPane() {
+        guard supportsLocalHistory else { return }
+        if rightPaneMode == .history {
+            rightPaneMode = .none
+            return
+        }
+        refreshLocalHistorySelection(preserveSelection: false)
+        rightPaneMode = .history
+    }
+
     private func toggleMarkdownPreview() {
         guard supportsMarkdownPreview else { return }
-        isMarkdownPreviewVisible.toggle()
+        rightPaneMode = rightPaneMode == .preview ? .none : .preview
+    }
+
+    private func refreshLocalHistorySelection(preserveSelection: Bool) {
+        guard supportsLocalHistory else {
+            localHistoryTrackingInfoState = nil
+            historyEntries = []
+            selectedHistoryEntryID = nil
+            clearLocalHistoryDiffState()
+            return
+        }
+
+        refreshLocalHistoryTrackingInfo()
+        let entries = appDelegate.currentEditorLocalHistoryEntries()
+        historyEntries = entries
+        synchronizeLocalHistoryCaches(with: entries)
+
+        guard !entries.isEmpty else {
+            selectedHistoryEntryID = nil
+            clearLocalHistoryDiffState()
+            return
+        }
+
+        if preserveSelection,
+           let selectedHistoryEntryID,
+           entries.contains(where: { $0.id == selectedHistoryEntryID }) {
+            return
+        }
+
+        selectedHistoryEntryID = nil
+    }
+
+    private func selectLocalHistoryEntry(_ entry: FileLocalHistoryManager.SnapshotEntry) {
+        selectedHistoryEntryID = entry.id
+        selectedHistoryDiff = nil
+        selectedHistoryDiffEntryID = nil
+        requestSelectedLocalHistoryDiff()
+    }
+
+    private func restoreSelectedLocalHistoryEntry() {
+        guard let selectedHistoryEntry,
+              let snapshotText = cachedLocalHistorySnapshotText(for: selectedHistoryEntry) else { return }
+        draftText = snapshotText
+    }
+
+    private func deleteSelectedLocalHistoryEntry() {
+        guard let selectedHistoryEntry else { return }
+        guard appDelegate.deleteCurrentEditorLocalHistoryEntry(selectedHistoryEntry) else { return }
+        selectedHistoryEntryID = nil
+        refreshLocalHistorySelection(preserveSelection: false)
+        clearLocalHistoryDiffState()
+    }
+
+    private func deleteAllLocalHistory() {
+        guard appDelegate.deleteAllCurrentEditorLocalHistory() else { return }
+        selectedHistoryEntryID = nil
+        refreshLocalHistorySelection(preserveSelection: false)
+        clearLocalHistoryDiffState()
+    }
+
+    private func clearLocalHistoryDiffState() {
+        historyComputationRevision += 1
+        historyDiffSummaries = [:]
+        selectedHistoryDiff = nil
+        selectedHistoryDiffEntryID = nil
+        historySnapshotTextCache = [:]
+        pendingHistorySummaryEntryIDs = []
+    }
+
+    private func refreshLocalHistoryDiffState() {
+        guard supportsLocalHistory, rightPaneMode == .history else {
+            clearLocalHistoryDiffState()
+            return
+        }
+
+        invalidateHistoryDiffWork(clearSnapshotCache: false)
+        requestVisibleLocalHistorySummaries()
+        requestSelectedLocalHistoryDiff()
+    }
+
+    private func refreshLocalHistoryTrackingInfo() {
+        localHistoryTrackingInfoState = appDelegate.currentEditorLocalHistoryTrackingInfo()
+    }
+
+    private func refreshLocalHistoryHashes() {
+        currentDraftHashState = sha256Hex(for: draftText)
+        if !saveStatusState.lastPersistedText.isEmpty || saveStatusState.lastSaveDestination != nil {
+            lastPersistedHashState = sha256Hex(for: saveStatusState.lastPersistedText)
+        } else {
+            lastPersistedHashState = nil
+        }
+    }
+
+    private func invalidateHistoryDiffWork(clearSnapshotCache: Bool) {
+        historyComputationRevision += 1
+        historyDiffSummaries = [:]
+        pendingHistorySummaryEntryIDs = []
+        selectedHistoryDiff = nil
+        selectedHistoryDiffEntryID = nil
+        if clearSnapshotCache {
+            historySnapshotTextCache = [:]
+        }
+    }
+
+    private func requestInitialLocalHistorySummaries() {
+        for entry in historyEntries.prefix(Self.initialHistorySummaryRequestLimit) {
+            requestHistorySummary(for: entry)
+        }
+    }
+
+    private func requestVisibleLocalHistorySummaries() {
+        let visibleEntries = historyEntries.filter { visibleHistoryEntryIDs.contains($0.id) }
+        if visibleEntries.isEmpty {
+            requestInitialLocalHistorySummaries()
+            return
+        }
+
+        for entry in visibleEntries {
+            requestHistorySummary(for: entry)
+        }
+    }
+
+    private func requestHistorySummary(for entry: FileLocalHistoryManager.SnapshotEntry) {
+        guard supportsLocalHistory, rightPaneMode == .history else { return }
+        guard historyDiffSummaries[entry.id] == nil, !pendingHistorySummaryEntryIDs.contains(entry.id) else { return }
+
+        let revision = historyComputationRevision
+        let snapshotCache = historySnapshotTextCache
+        let currentText = draftText
+        let currentHash = currentDraftHash
+        pendingHistorySummaryEntryIDs.insert(entry.id)
+
+        Self.localHistoryComputationQueue.async { [appDelegate] in
+            let resolved = Self.resolveLocalHistorySnapshotText(
+                entry: entry,
+                snapshotCache: snapshotCache,
+                appDelegate: appDelegate
+            )
+            let result = Self.computeLocalHistoryDiff(
+                entry: entry,
+                currentDraftHash: currentHash,
+                currentText: currentText,
+                snapshotText: resolved
+            )
+            DispatchQueue.main.async {
+                guard revision == historyComputationRevision else { return }
+                pendingHistorySummaryEntryIDs.remove(entry.id)
+                if let resolved {
+                    historySnapshotTextCache[entry.id] = resolved
+                }
+                guard historyEntries.contains(where: { $0.id == entry.id }) else { return }
+                if !result.isUnavailable {
+                    historyDiffSummaries[entry.id] = result.summary
+                }
+            }
+        }
+    }
+
+    private func requestSelectedLocalHistoryDiff() {
+        guard supportsLocalHistory, rightPaneMode == .history, let selectedHistoryEntry else {
+            selectedHistoryDiff = nil
+            selectedHistoryDiffEntryID = nil
+            return
+        }
+
+        selectedHistoryDiff = nil
+        selectedHistoryDiffEntryID = nil
+        let revision = historyComputationRevision
+        let selectedEntryID = selectedHistoryEntry.id
+        let snapshotCache = historySnapshotTextCache
+        let currentText = draftText
+        let currentHash = currentDraftHash
+
+        Self.localHistoryComputationQueue.async { [appDelegate] in
+            let resolved = Self.resolveLocalHistorySnapshotText(
+                entry: selectedHistoryEntry,
+                snapshotCache: snapshotCache,
+                appDelegate: appDelegate
+            )
+            let result = Self.computeLocalHistoryDiff(
+                entry: selectedHistoryEntry,
+                currentDraftHash: currentHash,
+                currentText: currentText,
+                snapshotText: resolved
+            )
+            DispatchQueue.main.async {
+                guard revision == historyComputationRevision else { return }
+                guard self.selectedHistoryEntryID == selectedEntryID else { return }
+                if let resolved {
+                    historySnapshotTextCache[selectedEntryID] = resolved
+                }
+                selectedHistoryDiff = result
+                selectedHistoryDiffEntryID = selectedEntryID
+                if !result.isUnavailable {
+                    historyDiffSummaries[selectedEntryID] = result.summary
+                }
+            }
+        }
+    }
+
+    private func localHistoryDiffResult(for entry: FileLocalHistoryManager.SnapshotEntry) -> LocalHistoryDiffEngine.Result {
+        Self.computeLocalHistoryDiff(
+            entry: entry,
+            currentDraftHash: currentDraftHash,
+            currentText: draftText,
+            snapshotText: cachedLocalHistorySnapshotText(for: entry)
+        )
+    }
+
+    private func historyDiffSummary(for entry: FileLocalHistoryManager.SnapshotEntry) -> LocalHistoryDiffEngine.Summary? {
+        historyDiffSummaries[entry.id]
+    }
+
+    private func cachedLocalHistorySnapshotText(for entry: FileLocalHistoryManager.SnapshotEntry) -> String? {
+        if let cached = historySnapshotTextCache[entry.id] {
+            return cached
+        }
+
+        guard let snapshotText = Self.resolveLocalHistorySnapshotText(
+            entry: entry,
+            snapshotCache: historySnapshotTextCache,
+            appDelegate: appDelegate
+        ) else {
+            return nil
+        }
+
+        historySnapshotTextCache[entry.id] = snapshotText
+        return snapshotText
+    }
+
+    private func synchronizeLocalHistoryCaches(with entries: [FileLocalHistoryManager.SnapshotEntry]) {
+        let validEntryIDs = Set(entries.map(\.id))
+        historyDiffSummaries = historyDiffSummaries.filter { validEntryIDs.contains($0.key) }
+        historySnapshotTextCache = historySnapshotTextCache.filter { validEntryIDs.contains($0.key) }
+        pendingHistorySummaryEntryIDs = Set(pendingHistorySummaryEntryIDs.filter { validEntryIDs.contains($0) })
+        visibleHistoryEntryIDs = Set(visibleHistoryEntryIDs.filter { validEntryIDs.contains($0) })
+        if let selectedHistoryDiffEntryID, !validEntryIDs.contains(selectedHistoryDiffEntryID) {
+            selectedHistoryDiff = nil
+            self.selectedHistoryDiffEntryID = nil
+        }
+    }
+
+    private func historyEntryDidAppear(_ entry: FileLocalHistoryManager.SnapshotEntry) {
+        visibleHistoryEntryIDs.insert(entry.id)
+        requestHistorySummary(for: entry)
+    }
+
+    private func historyEntryDidDisappear(_ entry: FileLocalHistoryManager.SnapshotEntry) {
+        visibleHistoryEntryIDs.remove(entry.id)
+    }
+
+    private func historyBadge(for entry: FileLocalHistoryManager.SnapshotEntry) -> LocalHistoryEntryBadge? {
+        if entry.contentHash == currentDraftHash {
+            return LocalHistoryEntryBadge(
+                title: t("Current", "現在"),
+                tint: historyAccentColor
+            )
+        }
+
+        if let lastPersistedHash, entry.contentHash == lastPersistedHash {
+            return LocalHistoryEntryBadge(
+                title: t("Saved", "保存済み"),
+                tint: Color(red: 0.22, green: 0.67, blue: 0.34)
+            )
+        }
+
+        if historyEntries.first?.id == entry.id {
+            return LocalHistoryEntryBadge(
+                title: t("Latest", "最新"),
+                tint: Color(red: 0.35, green: 0.40, blue: 0.48)
+            )
+        }
+
+        return nil
+    }
+
+    private func sha256Hex(for text: String) -> String {
+        let digest = SHA256.hash(data: Data(text.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func resolveLocalHistorySnapshotText(
+        entry: FileLocalHistoryManager.SnapshotEntry,
+        snapshotCache: [String: String],
+        appDelegate: AppDelegate
+    ) -> String? {
+        if let cached = snapshotCache[entry.id] {
+            return cached
+        }
+        return appDelegate.currentEditorLocalHistoryText(for: entry)
+    }
+
+    private static func computeLocalHistoryDiff(
+        entry: FileLocalHistoryManager.SnapshotEntry,
+        currentDraftHash: String,
+        currentText: String,
+        snapshotText: String?
+    ) -> LocalHistoryDiffEngine.Result {
+        if entry.contentHash == currentDraftHash {
+            return .identical
+        }
+
+        guard let snapshotText else {
+            return .unavailable
+        }
+
+        return LocalHistoryDiffEngine.compare(snapshotText: snapshotText, currentText: currentText)
     }
 
     private func t(_ english: String, _ japanese: String) -> String {
         appDelegate.settings.settingsLanguage == .japanese ? japanese : english
+    }
+}
+
+struct LocalHistoryDiffEngine {
+    struct Summary: Equatable {
+        let additions: Int
+        let removals: Int
+
+        static let zero = Summary(additions: 0, removals: 0)
+
+        var hasChanges: Bool {
+            additions > 0 || removals > 0
+        }
+    }
+
+    enum LineKind: Equatable {
+        case unchanged
+        case added
+        case removed
+    }
+
+    struct Line: Equatable, Identifiable {
+        let id: Int
+        let kind: LineKind
+        let oldLineNumber: Int?
+        let newLineNumber: Int?
+        let text: String
+    }
+
+    struct Result: Equatable {
+        let summary: Summary
+        let lines: [Line]
+        let isTruncated: Bool
+        let isUnavailable: Bool
+
+        static let identical = Result(summary: .zero, lines: [], isTruncated: false, isUnavailable: false)
+        static let unavailable = Result(summary: .zero, lines: [], isTruncated: false, isUnavailable: true)
+    }
+
+    static func compare(
+        snapshotText: String,
+        currentText: String,
+        maximumComparableLines: Int = 400,
+        maximumCellCount: Int = 160_000
+    ) -> Result {
+        let snapshotLines = normalizedLines(in: snapshotText)
+        let currentLines = normalizedLines(in: currentText)
+
+        if snapshotLines == currentLines {
+            return .identical
+        }
+
+        let comparableLineCount = max(snapshotLines.count, currentLines.count)
+        let cellCount = snapshotLines.count * currentLines.count
+        if comparableLineCount > maximumComparableLines || cellCount > maximumCellCount {
+            let fallbackDifference = Array(currentLines.difference(from: snapshotLines))
+            return Result(
+                summary: Summary(
+                    additions: fallbackDifference.reduce(into: 0) { count, change in
+                        if case .insert = change { count += 1 }
+                    },
+                    removals: fallbackDifference.reduce(into: 0) { count, change in
+                        if case .remove = change { count += 1 }
+                    }
+                ),
+                lines: [],
+                isTruncated: true,
+                isUnavailable: false
+            )
+        }
+
+        let table = lcsTable(snapshotLines: snapshotLines, currentLines: currentLines)
+        var lines: [Line] = []
+        var snapshotIndex = 0
+        var currentIndex = 0
+        var nextID = 0
+        var additions = 0
+        var removals = 0
+
+        while snapshotIndex < snapshotLines.count || currentIndex < currentLines.count {
+            if snapshotIndex < snapshotLines.count,
+               currentIndex < currentLines.count,
+               snapshotLines[snapshotIndex] == currentLines[currentIndex] {
+                lines.append(
+                    Line(
+                        id: nextID,
+                        kind: .unchanged,
+                        oldLineNumber: snapshotIndex + 1,
+                        newLineNumber: currentIndex + 1,
+                        text: snapshotLines[snapshotIndex]
+                    )
+                )
+                snapshotIndex += 1
+                currentIndex += 1
+                nextID += 1
+                continue
+            }
+
+            let preferInsertion =
+                currentIndex < currentLines.count &&
+                (snapshotIndex == snapshotLines.count || table[snapshotIndex][currentIndex + 1] > table[snapshotIndex + 1][currentIndex])
+
+            if preferInsertion {
+                lines.append(
+                    Line(
+                        id: nextID,
+                        kind: .added,
+                        oldLineNumber: nil,
+                        newLineNumber: currentIndex + 1,
+                        text: currentLines[currentIndex]
+                    )
+                )
+                currentIndex += 1
+                additions += 1
+            } else if snapshotIndex < snapshotLines.count {
+                lines.append(
+                    Line(
+                        id: nextID,
+                        kind: .removed,
+                        oldLineNumber: snapshotIndex + 1,
+                        newLineNumber: nil,
+                        text: snapshotLines[snapshotIndex]
+                    )
+                )
+                snapshotIndex += 1
+                removals += 1
+            }
+            nextID += 1
+        }
+
+        return Result(
+            summary: Summary(additions: additions, removals: removals),
+            lines: lines,
+            isTruncated: false,
+            isUnavailable: false
+        )
+    }
+
+    static func normalizedLines(in text: String) -> [String] {
+        let normalized = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        guard !normalized.isEmpty else {
+            return []
+        }
+        var lines = normalized.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        if normalized.hasSuffix("\n"), lines.last == "" {
+            lines.removeLast()
+        }
+        return lines
+    }
+
+    private static func lcsTable(snapshotLines: [String], currentLines: [String]) -> [[Int]] {
+        var table = Array(
+            repeating: Array(repeating: 0, count: currentLines.count + 1),
+            count: snapshotLines.count + 1
+        )
+
+        guard !snapshotLines.isEmpty, !currentLines.isEmpty else {
+            return table
+        }
+
+        for snapshotIndex in stride(from: snapshotLines.count - 1, through: 0, by: -1) {
+            for currentIndex in stride(from: currentLines.count - 1, through: 0, by: -1) {
+                if snapshotLines[snapshotIndex] == currentLines[currentIndex] {
+                    table[snapshotIndex][currentIndex] = table[snapshotIndex + 1][currentIndex + 1] + 1
+                } else {
+                    table[snapshotIndex][currentIndex] = max(
+                        table[snapshotIndex + 1][currentIndex],
+                        table[snapshotIndex][currentIndex + 1]
+                    )
+                }
+            }
+        }
+
+        return table
     }
 }
 
@@ -2227,7 +3203,344 @@ struct MarkdownPreviewResizeHandle: View {
                         onDrag(value.translation.width)
                     }
             )
-            .help("Resize Markdown preview")
+            .help("Resize side pane")
+    }
+}
+
+private struct LocalHistorySidebar: View {
+    let entries: [FileLocalHistoryManager.SnapshotEntry]
+    let selectedEntryID: String?
+    let selectedDiff: LocalHistoryDiffEngine.Result?
+    let width: CGFloat
+    let minHeight: CGFloat
+    let fontScale: CGFloat
+    let theme: InterfaceThemeDefinition
+    let emptyTitle: String
+    let emptyMessage: String
+    let openFolderLabel: String
+    let currentDraftLabel: String
+    let diffIdenticalLabel: String
+    let diffLoadingLabel: String
+    let diffUnavailableLabel: String
+    let diffTruncatedLabel: String
+    let onSelectEntry: (FileLocalHistoryManager.SnapshotEntry) -> Void
+    let onOpenFolder: () -> Void
+    let onAppearEntry: (FileLocalHistoryManager.SnapshotEntry) -> Void
+    let onDisappearEntry: (FileLocalHistoryManager.SnapshotEntry) -> Void
+    let badgeProvider: (FileLocalHistoryManager.SnapshotEntry) -> StandaloneNoteEditorView.LocalHistoryEntryBadge?
+    let diffSummaryProvider: (FileLocalHistoryManager.SnapshotEntry) -> LocalHistoryDiffEngine.Summary?
+
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        return formatter
+    }()
+
+    private static let timestampFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
+    private let historyAccentColor = Color(red: 0.18, green: 0.49, blue: 0.94)
+
+    private var selectedEntry: FileLocalHistoryManager.SnapshotEntry? {
+        guard let selectedEntryID else { return nil }
+        return entries.first { $0.id == selectedEntryID }
+    }
+
+    var body: some View {
+        Group {
+            if entries.isEmpty {
+                emptyState
+            } else if let selectedEntry {
+                diffView(for: selectedEntry, diff: selectedDiff)
+            } else {
+                entryListView
+            }
+        }
+        .frame(width: width)
+        .frame(minHeight: minHeight, alignment: .topLeading)
+        .padding(8)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color(red: 0.94, green: 0.95, blue: 0.98).opacity(0.16))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.white.opacity(0.16), lineWidth: 0.8)
+        )
+    }
+
+    private var emptyState: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(emptyTitle)
+                .font(.system(size: 11 * fontScale, weight: .semibold))
+                .foregroundStyle(.primary)
+            Text(emptyMessage)
+                .font(.system(size: 10 * fontScale, weight: .medium))
+                .foregroundStyle(theme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            Button(action: onOpenFolder) {
+                Label(openFolderLabel, systemImage: "folder")
+                    .font(.system(size: 10.5 * fontScale, weight: .semibold))
+            }
+            .buttonStyle(.bordered)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(10)
+    }
+
+    private var entryListView: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                        historyListRow(entry)
+                        if index < entries.count - 1 {
+                            Divider()
+                                .overlay(Color.white.opacity(0.06))
+                        }
+                    }
+                }
+                .padding(.horizontal, 4)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+            HStack(spacing: 8) {
+                Text("\(entries.count) snapshot\(entries.count == 1 ? "" : "s")")
+                    .font(.system(size: 9.5 * fontScale, weight: .medium))
+                    .foregroundStyle(theme.secondaryText)
+            }
+        }
+    }
+
+    private func historyListRow(_ entry: FileLocalHistoryManager.SnapshotEntry) -> some View {
+        let badge = badgeProvider(entry)
+        let diffSummary = diffSummaryProvider(entry)
+
+        return Button {
+            onSelectEntry(entry)
+        } label: {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(historyAccentColor)
+                    .frame(width: 6 * fontScale, height: 6 * fontScale)
+
+                Text(Self.relativeFormatter.localizedString(for: entry.createdAt, relativeTo: Date()))
+                    .font(.system(size: 10.5 * fontScale, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+
+                if let badge {
+                    Text(badge.title)
+                        .font(.system(size: 9 * fontScale, weight: .semibold))
+                        .foregroundStyle(badge.tint)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 6)
+
+                if let diffSummary {
+                    diffSummaryView(diffSummary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 7)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onAppear {
+            onAppearEntry(entry)
+        }
+        .onDisappear {
+            onDisappearEntry(entry)
+        }
+    }
+
+    private func diffView(
+        for selectedEntry: FileLocalHistoryManager.SnapshotEntry,
+        diff: LocalHistoryDiffEngine.Result?
+    ) -> some View {
+        diffCanvas(for: selectedEntry, diff: diff)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func diffCanvas(
+        for selectedEntry: FileLocalHistoryManager.SnapshotEntry,
+        diff: LocalHistoryDiffEngine.Result?
+    ) -> some View {
+        Group {
+            if let diff {
+                if diff.isUnavailable {
+                    Text(diffUnavailableLabel)
+                        .font(.system(size: 10 * fontScale, weight: .medium))
+                        .foregroundStyle(theme.secondaryText)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                        .padding(12)
+                } else if !diff.summary.hasChanges {
+                    Text(diffIdenticalLabel)
+                        .font(.system(size: 10 * fontScale, weight: .medium))
+                        .foregroundStyle(theme.secondaryText)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                        .padding(12)
+                } else if diff.isTruncated {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(Self.timestampFormatter.string(from: selectedEntry.createdAt))
+                            .font(.system(size: 9.5 * fontScale, weight: .semibold))
+                            .foregroundStyle(theme.secondaryText)
+                        Text(diffTruncatedLabel)
+                            .font(.system(size: 10 * fontScale, weight: .medium))
+                            .foregroundStyle(theme.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .padding(12)
+                } else {
+                    AttributedEditorPreviewTextView(
+                        attributedText: diffAttributedText(for: diff),
+                        fontSize: 12 * fontScale
+                    )
+                }
+            } else {
+                Text(diffLoadingLabel)
+                    .font(.system(size: 10 * fontScale, weight: .medium))
+                    .foregroundStyle(theme.secondaryText)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .padding(12)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.black.opacity(0.07))
+                .overlay(theme.cardFill.opacity(0.45))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.white.opacity(0.22), lineWidth: 0.8)
+        )
+    }
+
+    private func diffSummaryView(_ summary: LocalHistoryDiffEngine.Summary) -> some View {
+        HStack(spacing: 4) {
+            Text("+\(summary.additions)")
+                .font(.system(size: 9.5 * fontScale, weight: .semibold, design: .monospaced))
+                .foregroundStyle(Color(red: 0.38, green: 0.86, blue: 0.47))
+            Text("-\(summary.removals)")
+                .font(.system(size: 9.5 * fontScale, weight: .semibold, design: .monospaced))
+                .foregroundStyle(Color(red: 0.98, green: 0.48, blue: 0.48))
+        }
+    }
+
+    private func summaryHeaderText(
+        for selectedEntry: FileLocalHistoryManager.SnapshotEntry,
+        summary: LocalHistoryDiffEngine.Summary
+    ) -> String {
+        "\(currentDraftLabel) vs \(Self.timestampFormatter.string(from: selectedEntry.createdAt))  +\(summary.additions) / -\(summary.removals)"
+    }
+
+    private func lineBackgroundColor(for kind: LocalHistoryDiffEngine.LineKind) -> NSColor {
+        switch kind {
+        case .unchanged:
+            return .clear
+        case .added:
+            return NSColor(calibratedRed: 0.19, green: 0.52, blue: 0.25, alpha: 0.22)
+        case .removed:
+            return NSColor(calibratedRed: 0.62, green: 0.19, blue: 0.19, alpha: 0.22)
+        }
+    }
+
+    private func diffAttributedText(for diff: LocalHistoryDiffEngine.Result) -> NSAttributedString {
+        let result = NSMutableAttributedString()
+        let textFont = NSFont.systemFont(ofSize: 12 * fontScale)
+        let gutterFont = NSFont.monospacedDigitSystemFont(ofSize: 10 * fontScale, weight: .medium)
+        let markerFont = NSFont.monospacedSystemFont(ofSize: 10.5 * fontScale, weight: .semibold)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byWordWrapping
+        paragraph.tabStops = [
+            NSTextTab(textAlignment: .left, location: 18 * fontScale),
+            NSTextTab(textAlignment: .right, location: 48 * fontScale),
+            NSTextTab(textAlignment: .right, location: 82 * fontScale),
+            NSTextTab(textAlignment: .left, location: 96 * fontScale)
+        ]
+        paragraph.defaultTabInterval = 96 * fontScale
+        paragraph.headIndent = 96 * fontScale
+
+        let textAttributes: [NSAttributedString.Key: Any] = [
+            .font: textFont,
+            .foregroundColor: NSColor.labelColor,
+            .paragraphStyle: paragraph
+        ]
+        let gutterAttributes: [NSAttributedString.Key: Any] = [
+            .font: gutterFont,
+            .foregroundColor: NSColor.secondaryLabelColor,
+            .paragraphStyle: paragraph
+        ]
+
+        for (index, line) in diff.lines.enumerated() {
+            let attributedLine = NSMutableAttributedString()
+            attributedLine.append(NSAttributedString(
+                string: diffMarker(for: line.kind),
+                attributes: [
+                    .font: markerFont,
+                    .foregroundColor: diffMarkerColor(for: line.kind),
+                    .paragraphStyle: paragraph
+                ]
+            ))
+            attributedLine.append(NSAttributedString(string: "\t", attributes: gutterAttributes))
+            attributedLine.append(NSAttributedString(
+                string: line.oldLineNumber.map(String.init) ?? "",
+                attributes: gutterAttributes
+            ))
+            attributedLine.append(NSAttributedString(string: "\t", attributes: gutterAttributes))
+            attributedLine.append(NSAttributedString(
+                string: line.newLineNumber.map(String.init) ?? "",
+                attributes: gutterAttributes
+            ))
+            attributedLine.append(NSAttributedString(string: "\t", attributes: gutterAttributes))
+            attributedLine.append(NSAttributedString(
+                string: line.text.isEmpty ? " " : line.text,
+                attributes: textAttributes
+            ))
+            if line.kind != .unchanged {
+                attributedLine.addAttribute(
+                    .backgroundColor,
+                    value: lineBackgroundColor(for: line.kind),
+                    range: NSRange(location: 0, length: attributedLine.length)
+                )
+            }
+            result.append(attributedLine)
+            if index < diff.lines.count - 1 {
+                result.append(NSAttributedString(string: "\n", attributes: textAttributes))
+            }
+        }
+
+        return result
+    }
+
+    private func diffMarker(for kind: LocalHistoryDiffEngine.LineKind) -> String {
+        switch kind {
+        case .unchanged:
+            return " "
+        case .added:
+            return "+"
+        case .removed:
+            return "-"
+        }
+    }
+
+    private func diffMarkerColor(for kind: LocalHistoryDiffEngine.LineKind) -> NSColor {
+        switch kind {
+        case .unchanged:
+            return .secondaryLabelColor
+        case .added:
+            return NSColor(calibratedRed: 0.38, green: 0.86, blue: 0.47, alpha: 1)
+        case .removed:
+            return NSColor(calibratedRed: 0.98, green: 0.48, blue: 0.48, alpha: 1)
+        }
     }
 }
 

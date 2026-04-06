@@ -184,10 +184,10 @@ final class ClipboardWorkflowRegressionTests: XCTestCase {
         _ = editor.performKeyEquivalent(with: keyEvent(matching: AppSettings.default.normalizeForCommandShortcut))
         XCTAssertEqual(editor.string, "brew install\ngit\n")
 
-        _ = editor.performKeyEquivalent(with: keyEvent(keyCode: 6, characters: "z", modifiers: .command))
+        editor.undoManager?.undo()
         XCTAssertEqual(editor.string, "  brew install \n  git  \n")
 
-        _ = editor.performKeyEquivalent(with: keyEvent(keyCode: 6, characters: "Z", modifiers: [.command, .shift]))
+        editor.undoManager?.redo()
         XCTAssertEqual(editor.string, "brew install\ngit\n")
     }
 
@@ -209,6 +209,74 @@ final class ClipboardWorkflowRegressionTests: XCTestCase {
 
         XCTAssertEqual(dataManager.allItems().filter { $0.isManualNote }.count, 1)
         XCTAssertEqual(dataManager.allItems().filter { $0.textContent == "clipboard" }.count, 1)
+    }
+
+    func testMinimalOverrideWorkflowRequiresNativeAndCustomRoutingToStaySeparated() throws {
+        let source = try String(contentsOf: uiComponentsURL(), encoding: .utf8)
+        XCTAssertFalse(source.contains("SelectableMarkdownWebView"))
+        XCTAssertFalse(source.contains("NSEvent.addLocalMonitorForEvents"))
+        XCTAssertFalse(source.contains("moveToBeginningOfLine(nil)"))
+        XCTAssertFalse(source.contains("moveToEndOfLine(nil)"))
+        XCTAssertFalse(source.contains("deleteToBeginningOfLine(nil)"))
+        XCTAssertFalse(source.contains("moveWordLeft(nil)"))
+        XCTAssertFalse(source.contains("moveWordRight(nil)"))
+        XCTAssertFalse(source.contains("deleteWordBackward(nil)"))
+
+        let panel = CustomKeyView(frame: .init(x: 0, y: 0, width: 280, height: 160))
+        var panelEvents: [String] = []
+        panel.togglePinnedAreaShortcut = AppSettings.default.togglePinnedAreaShortcut
+        panel.newNoteShortcut = AppSettings.default.newNoteShortcut
+        panel.copyJoinedShortcut = AppSettings.default.copyJoinedShortcut
+        panel.copyNormalizedShortcut = AppSettings.default.copyNormalizedShortcut
+        panel.onTogglePinnedArea = { panelEvents.append("togglePins") }
+        panel.onCreateNewNote = { panelEvents.append("newNote") }
+        panel.onPasteSelection = { panelEvents.append("paste") }
+        panel.onCopyCommand = { panelEvents.append("copy") }
+        panel.onCopyJoinedCommand = { panelEvents.append("join") }
+        panel.onCopyNormalizedCommand = { panelEvents.append("normalize") }
+        panel.onToggleHelp = { panelEvents.append("help") }
+
+        panel.keyDown(with: keyEvent(keyCode: 48, characters: "\t"))
+        panel.keyDown(with: keyEvent(keyCode: UInt16(kVK_ANSI_N), characters: "n"))
+        XCTAssertTrue(panel.performKeyEquivalent(with: keyEvent(keyCode: 36, characters: "\r", modifiers: .command)))
+        XCTAssertTrue(panel.performKeyEquivalent(with: keyEvent(keyCode: UInt16(kVK_ANSI_C), characters: "c", modifiers: .command)))
+        XCTAssertTrue(panel.performKeyEquivalent(with: keyEvent(matching: AppSettings.default.copyJoinedShortcut)))
+        XCTAssertTrue(panel.performKeyEquivalent(with: keyEvent(matching: AppSettings.default.copyNormalizedShortcut)))
+        XCTAssertTrue(panel.performKeyEquivalent(with: keyEvent(keyCode: 44, characters: "?", modifiers: [.command, .shift])))
+        XCTAssertEqual(panelEvents, ["togglePins", "newNote", "paste", "copy", "join", "normalize", "help"])
+
+        panel.isEditorActive = true
+        XCTAssertFalse(panel.performKeyEquivalent(with: keyEvent(keyCode: UInt16(kVK_ANSI_C), characters: "c", modifiers: .command)))
+        XCTAssertEqual(panelEvents, ["togglePins", "newNote", "paste", "copy", "join", "normalize", "help"])
+
+        let editor = makeEditor(text: "alpha\nbeta\ngamma", selection: NSRange(location: 6, length: 0))
+        editor.keyDown(with: keyEvent(keyCode: 123, characters: "\u{F702}", modifiers: .command))
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 6, length: 0))
+        editor.keyDown(with: keyEvent(keyCode: 124, characters: "\u{F703}", modifiers: [.command, .shift]))
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 6, length: 4))
+
+        editor.keyDown(with: keyEvent(keyCode: 48, characters: "\t"))
+        XCTAssertEqual(editor.string, "alpha\n\tbeta\ngamma")
+        editor.keyDown(with: keyEvent(keyCode: 48, characters: "\t", modifiers: .shift))
+        XCTAssertEqual(editor.string, "alpha\nbeta\ngamma")
+
+        editor.setSelectedRange(NSRange(location: 0, length: editor.string.count))
+        XCTAssertTrue(editor.performKeyEquivalent(with: keyEvent(matching: AppSettings.default.joinLinesShortcut)))
+        XCTAssertEqual(editor.string, "alphabetagamma")
+        editor.undoManager?.undo()
+        XCTAssertEqual(editor.string, "alpha\nbeta\ngamma")
+
+        editor.setSelectedRange(NSRange(location: 0, length: editor.string.count))
+        XCTAssertTrue(editor.performKeyEquivalent(with: keyEvent(matching: AppSettings.default.normalizeForCommandShortcut)))
+        XCTAssertEqual(editor.string, "alpha\nbeta\ngamma")
+
+        let preview = MarkdownPreviewRenderer.attributedPreview(
+            for: "# Title\n\n- [ ] todo\n\n[Example](https://example.com)\n\n```swift\nprint(1)\n```"
+        )
+        XCTAssertTrue(preview.string.contains("Title"))
+        XCTAssertTrue(preview.string.contains("todo"))
+        XCTAssertTrue(preview.string.contains("Example"))
+        XCTAssertTrue(preview.string.contains("print(1)"))
     }
 
     private func makeTextItem(
@@ -352,5 +420,12 @@ final class ClipboardWorkflowRegressionTests: XCTestCase {
             flags.insert(.control)
         }
         return flags
+    }
+
+    private func uiComponentsURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Views/UIComponents.swift")
     }
 }
