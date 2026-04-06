@@ -597,6 +597,14 @@ final class AppDelegateTargetSelectionTests: XCTestCase {
         XCTAssertFalse(StandaloneNoteEditorView.CommitMode.orphanedCodex.supportsLocalHistory)
     }
 
+    func testStandaloneCommitModeUsesTrackedFileLocalHistoryMessagingForReturnToCodexAndFileBackedModes() {
+        XCTAssertTrue(StandaloneNoteEditorView.CommitMode.returnToCodex.usesTrackedFileLocalHistoryMessaging)
+        XCTAssertTrue(StandaloneNoteEditorView.CommitMode.fileBackedMarkdown.usesTrackedFileLocalHistoryMessaging)
+        XCTAssertTrue(StandaloneNoteEditorView.CommitMode.fileBackedText.usesTrackedFileLocalHistoryMessaging)
+        XCTAssertFalse(StandaloneNoteEditorView.CommitMode.pasteToTarget.usesTrackedFileLocalHistoryMessaging)
+        XCTAssertFalse(StandaloneNoteEditorView.CommitMode.orphanedCodex.usesTrackedFileLocalHistoryMessaging)
+    }
+
     func testUserDefaultsAppSettingsStorePersistsLocalHistoryPolicies() {
         let suiteName = "AppDelegateTargetSelectionTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!

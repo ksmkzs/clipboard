@@ -913,7 +913,7 @@ final class FileLocalHistoryManagerTests: XCTestCase {
         )
     }
 
-    func testReplacementFileCreatedWhileManagerWasOfflineDoesNotReuseOldHistory() throws {
+    func testAtomicSaveWhileManagerWasOfflinePreservesHistoryContinuity() throws {
         let watchedDirectory = temporaryDirectory.appendingPathComponent("Watched", isDirectory: true)
         try FileManager.default.createDirectory(at: watchedDirectory, withIntermediateDirectories: true)
 
@@ -928,7 +928,6 @@ final class FileLocalHistoryManagerTests: XCTestCase {
         )
         initialManager.scanNow()
 
-        try FileManager.default.removeItem(at: originalURL)
         try "second".write(to: originalURL, atomically: true, encoding: .utf8)
 
         let restartedManager = makeManager(
@@ -939,11 +938,9 @@ final class FileLocalHistoryManagerTests: XCTestCase {
         )
         restartedManager.scanNow()
 
-        let replacementEntries = restartedManager.historyEntries(for: originalURL)
-        XCTAssertEqual(replacementEntries.count, 1)
         XCTAssertEqual(
-            restartedManager.snapshotText(for: try XCTUnwrap(replacementEntries.first), fileURL: originalURL),
-            "second"
+            snapshotTexts(for: restartedManager, fileURL: originalURL),
+            ["first", "second"]
         )
     }
 

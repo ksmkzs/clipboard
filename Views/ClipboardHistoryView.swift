@@ -1674,6 +1674,15 @@ struct StandaloneNoteEditorView: View {
                 return false
             }
         }
+
+        var usesTrackedFileLocalHistoryMessaging: Bool {
+            switch self {
+            case .returnToCodex, .fileBackedMarkdown, .fileBackedText:
+                return true
+            case .pasteToTarget, .orphanedCodex:
+                return false
+            }
+        }
     }
 
     private enum RightPaneMode {
@@ -1868,26 +1877,26 @@ struct StandaloneNoteEditorView: View {
             return t("Disabled in Settings", "設定で無効")
         }
 
-        switch commitMode {
-        case .fileBackedMarkdown, .fileBackedText:
-            guard let info = localHistoryTrackingInfo else {
-                return t("Save as file to track", "ファイル保存で追跡開始")
-            }
-            switch (info.isTrackedByOpenedFile, info.isTrackedByWatchedDirectory) {
-            case (true, true):
-                return t("Opened here + Watched", "このアプリ + 監視")
-            case (true, false):
-                return t("Opened here", "このアプリで開いた")
-            case (false, true):
-                return t("Watched directory", "監視ディレクトリ")
-            case (false, false):
-                if info.historyEntryCount > 0 {
-                    return t("Existing snapshots only", "既存履歴のみ")
-                }
-                return t("Outside tracked scope", "追跡対象外")
-            }
-        case .pasteToTarget, .returnToCodex, .orphanedCodex:
+        guard commitMode.usesTrackedFileLocalHistoryMessaging else {
             return t("Save as file to track", "ファイル保存で追跡開始")
+        }
+
+        guard let info = localHistoryTrackingInfo else {
+            return t("Save or reopen once to track", "一度保存するか再オープンすると追跡開始")
+        }
+
+        switch (info.isTrackedByOpenedFile, info.isTrackedByWatchedDirectory) {
+        case (true, true):
+            return t("Opened here + Watched", "このアプリ + 監視")
+        case (true, false):
+            return t("Opened here", "このアプリで開いた")
+        case (false, true):
+            return t("Watched directory", "監視ディレクトリ")
+        case (false, false):
+            if info.historyEntryCount > 0 {
+                return t("Existing snapshots only", "既存履歴のみ")
+            }
+            return t("Outside tracked scope", "追跡対象外")
         }
     }
 
@@ -1918,30 +1927,32 @@ struct StandaloneNoteEditorView: View {
                 "設定でファイルのローカル履歴を有効にすると、スナップショットの収集が始まります。"
             )
         }
-        switch commitMode {
-        case .fileBackedMarkdown, .fileBackedText:
-            guard let info = localHistoryTrackingInfo else {
-                return t(
-                    "Save this document to a real file path to start collecting snapshots.",
-                    "この文書を実ファイルとして保存すると、スナップショットの収集が始まります。"
-                )
-            }
-            if info.isTracked {
-                return t(
-                    "This file is tracked. Save or reopen it once to create the first snapshot.",
-                    "このファイルは追跡対象です。一度保存するか再オープンすると最初のスナップショットが作成されます。"
-                )
-            }
-            return t(
-                "This file is outside the current tracking scope. Open it here with opened-file tracking enabled, or move it under the watched directory with a matching extension.",
-                "このファイルは現在の追跡対象外です。「ClipboardHistory で開いたファイルも追跡」を有効にするか、監視ディレクトリ配下の対象拡張子に置くと追跡されます。"
-            )
-        case .pasteToTarget, .returnToCodex, .orphanedCodex:
+
+        guard commitMode.usesTrackedFileLocalHistoryMessaging else {
             return t(
                 "Local history starts after this draft is saved as a real file.",
                 "ローカル履歴は、この下書きを実ファイルとして保存した後に始まります。"
             )
         }
+
+        guard let info = localHistoryTrackingInfo else {
+            return t(
+                "Save or reopen this file once to start collecting snapshots.",
+                "このファイルを一度保存するか再オープンすると、スナップショットの収集が始まります。"
+            )
+        }
+
+        if info.isTracked {
+            return t(
+                "This file is tracked. Save or reopen it once to create the first snapshot.",
+                "このファイルは追跡対象です。一度保存するか再オープンすると最初のスナップショットが作成されます。"
+            )
+        }
+
+        return t(
+            "This file is outside the current tracking scope. Open it here with opened-file tracking enabled, or move it under the watched directory with a matching extension.",
+            "このファイルは現在の追跡対象外です。「ClipboardHistory で開いたファイルも追跡」を有効にするか、監視ディレクトリ配下の対象拡張子に置くと追跡されます。"
+        )
     }
 
     private var rightPaneTitle: String {

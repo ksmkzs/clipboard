@@ -3695,7 +3695,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
                     codexContext: noteCodexSessionID.map {
                         CodexDraftContext(sessionID: $0, projectRootURL: noteCodexProjectRootURL)
                     },
-                    initialPreviewVisible: notePreviewVisible
+                    initialPreviewVisible: notePreviewVisible,
+                    initialHistoryVisible: noteHistoryVisible
                 )
             }
             noteEditorLastPersistedText = noteLastPersistedText
@@ -5015,7 +5016,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         initialText: String? = nil,
         isOrphaned: Bool = false,
         codexContext: CodexDraftContext? = nil,
-        initialPreviewVisible: Bool? = nil
+        initialPreviewVisible: Bool? = nil,
+        initialHistoryVisible: Bool = false
     ) -> NSWindowController {
         if !isOrphaned {
             fileLocalHistoryManager?.registerOpenedFile(fileURL.standardizedFileURL)
@@ -5032,7 +5034,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         noteEditorDraftText = resolvedInitialText
         noteEditorLastPersistedText = resolvedInitialText
         noteEditorMarkdownPreviewVisible = resolvedInitialPreviewVisible
-        noteEditorHistoryPaneVisible = false
+        noteEditorHistoryPaneVisible = initialHistoryVisible
         externalEditorSaveStatus.lastPersistedText = resolvedInitialText
         externalEditorSaveStatus.lastSaveDestination = nil
         externalEditorSaveStatus.saveRevision += 1
@@ -5044,6 +5046,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             codexContext: codexContext,
             commitMode: isOrphaned ? .orphanedCodex : .returnToCodex,
             initialMarkdownPreviewVisible: resolvedInitialPreviewVisible,
+            initialHistoryVisible: initialHistoryVisible,
             onDraftChange: { [weak self] text in
                 self?.noteEditorDraftText = text
             },
