@@ -992,11 +992,23 @@ final class FileLocalHistoryManager {
         currentSourceIdentity: String?
     ) -> Bool {
         // Atomic saves can replace the inode at the same path. Treat that as the
-        // same file unless the stored bookmark now resolves somewhere else.
+        // same file for sources already observed in this session unless the
+        // stored bookmark now resolves somewhere else.
         if let bookmarkedURL = resolvedBookmarkedURLLocked(from: manifest),
            fileManager.fileExists(atPath: bookmarkedURL.path),
            bookmarkedURL.standardizedFileURL != sourceURL.standardizedFileURL {
             return true
+        }
+
+        if let currentSourceIdentity,
+           let manifestSourceIdentity = manifest.sourceIdentity,
+           manifestSourceIdentity != currentSourceIdentity {
+            if manifest.sourceDeletedAt != nil {
+                return true
+            }
+
+            let sourcePath = sourceURL.standardizedFileURL.path
+            return observedStatesByPath[sourcePath] == nil
         }
 
         guard manifest.sourceDeletedAt != nil else {

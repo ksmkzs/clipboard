@@ -1665,6 +1665,15 @@ struct StandaloneNoteEditorView: View {
         case orphanedCodex
         case fileBackedMarkdown
         case fileBackedText
+
+        var supportsLocalHistory: Bool {
+            switch self {
+            case .returnToCodex, .fileBackedMarkdown, .fileBackedText:
+                return true
+            case .pasteToTarget, .orphanedCodex:
+                return false
+            }
+        }
     }
 
     private enum RightPaneMode {
@@ -1775,7 +1784,7 @@ struct StandaloneNoteEditorView: View {
     }
 
     private var supportsLocalHistory: Bool {
-        commitMode == .fileBackedMarkdown || commitMode == .fileBackedText
+        commitMode.supportsLocalHistory
     }
 
     private var isRightPaneVisible: Bool {

@@ -503,6 +503,100 @@ final class AppDelegateTargetSelectionTests: XCTestCase {
         )
     }
 
+    func testSupportsStandaloneEditorLocalHistoryForFileBackedAndCodexEditors() {
+        XCTAssertTrue(
+            AppDelegate.supportsStandaloneEditorLocalHistory(
+                externalMode: .fileBacked(.markdown),
+                hasFileURL: true,
+                isOrphanedCodexDraft: false
+            )
+        )
+        XCTAssertTrue(
+            AppDelegate.supportsStandaloneEditorLocalHistory(
+                externalMode: .codex,
+                hasFileURL: true,
+                isOrphanedCodexDraft: false
+            )
+        )
+        XCTAssertFalse(
+            AppDelegate.supportsStandaloneEditorLocalHistory(
+                externalMode: .codex,
+                hasFileURL: true,
+                isOrphanedCodexDraft: true
+            )
+        )
+        XCTAssertFalse(
+            AppDelegate.supportsStandaloneEditorLocalHistory(
+                externalMode: nil,
+                hasFileURL: true,
+                isOrphanedCodexDraft: false
+            )
+        )
+        XCTAssertFalse(
+            AppDelegate.supportsStandaloneEditorLocalHistory(
+                externalMode: .fileBacked(.text),
+                hasFileURL: false,
+                isOrphanedCodexDraft: false
+            )
+        )
+    }
+
+    func testShouldBootstrapCurrentEditorOpenedFileTrackingOnlyForEligibleEditors() {
+        XCTAssertTrue(
+            AppDelegate.shouldBootstrapCurrentEditorOpenedFileTracking(
+                isEnabled: true,
+                trackOpenedFiles: true,
+                externalMode: .fileBacked(.text),
+                hasFileURL: true,
+                isOrphanedCodexDraft: false
+            )
+        )
+        XCTAssertTrue(
+            AppDelegate.shouldBootstrapCurrentEditorOpenedFileTracking(
+                isEnabled: true,
+                trackOpenedFiles: true,
+                externalMode: .codex,
+                hasFileURL: true,
+                isOrphanedCodexDraft: false
+            )
+        )
+        XCTAssertFalse(
+            AppDelegate.shouldBootstrapCurrentEditorOpenedFileTracking(
+                isEnabled: false,
+                trackOpenedFiles: true,
+                externalMode: .fileBacked(.markdown),
+                hasFileURL: true,
+                isOrphanedCodexDraft: false
+            )
+        )
+        XCTAssertFalse(
+            AppDelegate.shouldBootstrapCurrentEditorOpenedFileTracking(
+                isEnabled: true,
+                trackOpenedFiles: false,
+                externalMode: .fileBacked(.markdown),
+                hasFileURL: true,
+                isOrphanedCodexDraft: false
+            )
+        )
+        XCTAssertFalse(
+            AppDelegate.shouldBootstrapCurrentEditorOpenedFileTracking(
+                isEnabled: true,
+                trackOpenedFiles: true,
+                externalMode: .codex,
+                hasFileURL: true,
+                isOrphanedCodexDraft: true
+            )
+        )
+    }
+
+    func testStandaloneCommitModeSupportsLocalHistoryForReturnToCodexAndFileBackedModes() {
+        XCTAssertTrue(StandaloneNoteEditorView.CommitMode.returnToCodex.supportsLocalHistory)
+        XCTAssertTrue(StandaloneNoteEditorView.CommitMode.fileBackedMarkdown.supportsLocalHistory)
+        XCTAssertTrue(StandaloneNoteEditorView.CommitMode.fileBackedText.supportsLocalHistory)
+        XCTAssertFalse(StandaloneNoteEditorView.CommitMode.pasteToTarget.supportsLocalHistory)
+        XCTAssertFalse(StandaloneNoteEditorView.CommitMode.orphanedCodex.supportsLocalHistory)
+    }
+
     func testUserDefaultsAppSettingsStorePersistsLocalHistoryPolicies() {
         let suiteName = "AppDelegateTargetSelectionTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!

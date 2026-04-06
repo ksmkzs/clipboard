@@ -433,6 +433,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         !isRunningAutomatedTests
     }
 
+    static func supportsStandaloneEditorLocalHistory(
+        externalMode: ExternalEditorMode?,
+        hasFileURL: Bool,
+        isOrphanedCodexDraft: Bool
+    ) -> Bool {
+        guard hasFileURL else {
+            return false
+        }
+
+        switch externalMode {
+        case .fileBacked:
+            return true
+        case .codex:
+            return !isOrphanedCodexDraft
+        case nil:
+            return false
+        }
+    }
+
+    static func shouldBootstrapCurrentEditorOpenedFileTracking(
+        isEnabled: Bool,
+        trackOpenedFiles: Bool,
+        externalMode: ExternalEditorMode?,
+        hasFileURL: Bool,
+        isOrphanedCodexDraft: Bool
+    ) -> Bool {
+        guard isEnabled, trackOpenedFiles else {
+            return false
+        }
+
+        return supportsStandaloneEditorLocalHistory(
+            externalMode: externalMode,
+            hasFileURL: hasFileURL,
+            isOrphanedCodexDraft: isOrphanedCodexDraft
+        )
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
     }
@@ -3524,6 +3561,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
                 pollingInterval: FileLocalHistoryManager.Settings.default.pollingInterval
             )
         )
+        registerCurrentEditorForLocalHistoryIfNeeded()
+    }
+
+    private func registerCurrentEditorForLocalHistoryIfNeeded() {
+        guard Self.shouldBootstrapCurrentEditorOpenedFileTracking(
+            isEnabled: settings.localFileHistoryEnabled,
+            trackOpenedFiles: settings.localFileHistoryTrackOpenedFiles,
+            externalMode: noteEditorExternalMode,
+            hasFileURL: noteEditorExternalFileURL != nil,
+            isOrphanedCodexDraft: noteEditorIsOrphanedCodexDraft
+        ),
+        let fileURL = noteEditorExternalFileURL?.standardizedFileURL else {
+            return
+        }
+
+        fileLocalHistoryManager?.registerOpenedFile(fileURL)
     }
 
     private func refreshVisibleWindowsAfterApplyingSettings(from previousSettings: AppSettings, to currentSettings: AppSettings) {
@@ -3813,7 +3866,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     }
 
     private var currentLocalHistoryFileURL: URL? {
-        guard isCurrentEditorFileBacked else {
+        guard Self.supportsStandaloneEditorLocalHistory(
+            externalMode: noteEditorExternalMode,
+            hasFileURL: noteEditorExternalFileURL != nil,
+            isOrphanedCodexDraft: noteEditorIsOrphanedCodexDraft
+        ) else {
             return nil
         }
         return noteEditorExternalFileURL?.standardizedFileURL
@@ -4960,6 +5017,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         codexContext: CodexDraftContext? = nil,
         initialPreviewVisible: Bool? = nil
     ) -> NSWindowController {
+        if !isOrphaned {
+            fileLocalHistoryManager?.registerOpenedFile(fileURL.standardizedFileURL)
+        }
         noteEditorItemID = nil
         noteEditorExternalFileURL = fileURL
         noteEditorExternalMode = .codex

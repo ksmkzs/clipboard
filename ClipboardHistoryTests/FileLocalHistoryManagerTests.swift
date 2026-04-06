@@ -913,6 +913,40 @@ final class FileLocalHistoryManagerTests: XCTestCase {
         )
     }
 
+    func testReplacementFileCreatedWhileManagerWasOfflineDoesNotReuseOldHistory() throws {
+        let watchedDirectory = temporaryDirectory.appendingPathComponent("Watched", isDirectory: true)
+        try FileManager.default.createDirectory(at: watchedDirectory, withIntermediateDirectories: true)
+
+        let originalURL = watchedDirectory.appendingPathComponent("draft.md")
+        try "first".write(to: originalURL, atomically: true, encoding: .utf8)
+
+        let initialManager = makeManager(
+            trackOpenedFiles: false,
+            watchedDirectoryPath: watchedDirectory.path,
+            watchedExtensions: "md",
+            deletedSourceBehavior: .keepAsOrphan
+        )
+        initialManager.scanNow()
+
+        try FileManager.default.removeItem(at: originalURL)
+        try "second".write(to: originalURL, atomically: true, encoding: .utf8)
+
+        let restartedManager = makeManager(
+            trackOpenedFiles: false,
+            watchedDirectoryPath: watchedDirectory.path,
+            watchedExtensions: "md",
+            deletedSourceBehavior: .keepAsOrphan
+        )
+        restartedManager.scanNow()
+
+        let replacementEntries = restartedManager.historyEntries(for: originalURL)
+        XCTAssertEqual(replacementEntries.count, 1)
+        XCTAssertEqual(
+            restartedManager.snapshotText(for: try XCTUnwrap(replacementEntries.first), fileURL: originalURL),
+            "second"
+        )
+    }
+
     func testDisablingHistoryPreservesExistingOrphanHistory() throws {
         let fileURL = temporaryDirectory.appendingPathComponent("draft.md")
         try "first".write(to: fileURL, atomically: true, encoding: .utf8)
