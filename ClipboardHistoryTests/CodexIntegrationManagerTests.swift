@@ -59,6 +59,15 @@ final class CodexIntegrationManagerTests: XCTestCase {
         XCTAssertEqual(status.unmanagedShellExportsDetected, false)
     }
 
+    func testInstallWritesResponsiveHelperPolling() throws {
+        let manager = makeManager()
+
+        _ = try manager.install()
+
+        let helperContent = try String(contentsOf: storePaths.codexHelperScriptURL, encoding: .utf8)
+        XCTAssertTrue(helperContent.contains("/bin/sleep 0.05"))
+    }
+
     func testInstallRejectsUnmanagedEditorExport() throws {
         try "export EDITOR='/usr/bin/vim'\n".write(to: shellConfigURL, atomically: true, encoding: .utf8)
 

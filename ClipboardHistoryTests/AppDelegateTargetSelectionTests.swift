@@ -194,6 +194,36 @@ final class AppDelegateTargetSelectionTests: XCTestCase {
         XCTAssertNil(resolved)
     }
 
+    func testResolvedStandaloneMarkdownPreviewVisibilityDefaultsOff() {
+        XCTAssertFalse(
+            AppDelegate.resolvedStandaloneMarkdownPreviewVisibility(
+                initialPreviewVisible: nil,
+                supportsMarkdownPreview: true
+            )
+        )
+        XCTAssertFalse(
+            AppDelegate.resolvedStandaloneMarkdownPreviewVisibility(
+                initialPreviewVisible: nil,
+                supportsMarkdownPreview: false
+            )
+        )
+    }
+
+    func testResolvedStandaloneMarkdownPreviewVisibilityPreservesExplicitPreference() {
+        XCTAssertTrue(
+            AppDelegate.resolvedStandaloneMarkdownPreviewVisibility(
+                initialPreviewVisible: true,
+                supportsMarkdownPreview: true
+            )
+        )
+        XCTAssertFalse(
+            AppDelegate.resolvedStandaloneMarkdownPreviewVisibility(
+                initialPreviewVisible: false,
+                supportsMarkdownPreview: true
+            )
+        )
+    }
+
     func testStandaloneEditorModeAfterSavingFileTransitionsManualNoteToFileBacked() {
         XCTAssertEqual(
             AppDelegate.standaloneEditorModeAfterSavingFile(currentMode: nil, destinationKind: .markdown),

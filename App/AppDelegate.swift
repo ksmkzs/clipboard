@@ -557,12 +557,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     private func startCodexOpenRequestMonitor() {
         codexOpenRequestTimer?.cancel()
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
-        timer.schedule(deadline: .now() + 0.2, repeating: 0.25)
+        timer.schedule(deadline: .now() + 0.05, repeating: 0.05)
         timer.setEventHandler { [weak self] in
             self?.consumeCodexOpenRequestIfNeeded()
         }
         codexOpenRequestTimer = timer
         timer.resume()
+        consumeCodexOpenRequestIfNeeded()
     }
 
     private func setupValidationCommandObserverIfRequested() {
@@ -4539,17 +4540,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
 
         requestStandaloneEditorReplacement { [weak self] canOpen in
             guard let self, canOpen else { return }
-            self.noteEditorExternalFileURL = standardizedURL
-            self.noteEditorExternalMode = .codex
-            self.noteEditorCompletionMarkerURL = codexCompletionMarkerURL(for: standardizedURL)
             self.noteEditorSessionStateURL = resolvedSessionStateURL
-            self.noteEditorItemID = nil
-            self.noteEditorDraftText = (try? String(contentsOf: standardizedURL, encoding: .utf8)) ?? ""
-            self.noteEditorLastPersistedText = self.noteEditorDraftText
-            self.noteEditorShouldCommitExternalDraft = false
-            self.noteEditorIsOrphanedCodexDraft = false
             self.noteEditorCodexSessionID = sessionID
             self.noteEditorCodexProjectRootURL = standardizedProjectRootURL
+            let initialText = (try? String(contentsOf: standardizedURL, encoding: .utf8)) ?? ""
 
             self.suppressPanelAutoClose = true
             self.promoteAppForExternalEditorIfNeeded()
@@ -4557,6 +4551,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             self.activateCurrentApp()
             let controller = self.makeExternalFileEditorWindowController(
                 fileURL: standardizedURL,
+                initialText: initialText,
                 codexContext: self.currentCodexDraftContext()
             )
             if let window = controller.window {
@@ -5030,7 +5025,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         noteEditorIsOrphanedCodexDraft = isOrphaned
         noteEditorIsPlaceholderManualNote = false
         let resolvedInitialText = initialText ?? ((try? String(contentsOf: fileURL, encoding: .utf8)) ?? "")
-        let resolvedInitialPreviewVisible = initialPreviewVisible ?? true
+        let resolvedInitialPreviewVisible = Self.resolvedStandaloneMarkdownPreviewVisibility(
+            initialPreviewVisible: initialPreviewVisible,
+            supportsMarkdownPreview: true
+        )
         noteEditorDraftText = resolvedInitialText
         noteEditorLastPersistedText = resolvedInitialText
         noteEditorMarkdownPreviewVisible = resolvedInitialPreviewVisible
@@ -5105,7 +5103,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         if let fileURL {
             fileLocalHistoryManager?.registerOpenedFile(fileURL.standardizedFileURL)
         }
-        let resolvedInitialPreviewVisible = initialPreviewVisible ?? kind.supportsMarkdownPreview
+        let resolvedInitialPreviewVisible = Self.resolvedStandaloneMarkdownPreviewVisibility(
+            initialPreviewVisible: initialPreviewVisible,
+            supportsMarkdownPreview: kind.supportsMarkdownPreview
+        )
         noteEditorItemID = nil
         noteEditorExternalFileURL = fileURL
         noteEditorExternalMode = .fileBacked(kind)
@@ -6008,6 +6009,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         }
 
         return nil
+    }
+
+    static func resolvedStandaloneMarkdownPreviewVisibility(
+        initialPreviewVisible: Bool?,
+        supportsMarkdownPreview: Bool
+    ) -> Bool {
+        guard supportsMarkdownPreview else {
+            return false
+        }
+        return initialPreviewVisible ?? false
     }
 
     func codexIntegrationStatus(inspectShellConfig: Bool = false) -> CodexIntegrationStatus {

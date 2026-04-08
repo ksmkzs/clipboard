@@ -11,6 +11,7 @@ struct ClipboardCodexIntegrationStatus {
 struct CodexIntegrationManager {
     static let managedBlockStart = "# >>> ClipboardHistory Codex integration >>>"
     static let managedBlockEnd = "# <<< ClipboardHistory Codex integration <<<"
+    private static let helperCompletionPollInterval = "0.05"
 
     private struct ShellInspection {
         let hasManagedBlock: Bool
@@ -124,7 +125,7 @@ struct CodexIntegrationManager {
         fi
 
         while [ ! -f "$DONE_FILE" ]; do
-          /bin/sleep 0.2
+          /bin/sleep \(Self.helperCompletionPollInterval)
         done
 
         /bin/rm -f "$DONE_FILE"

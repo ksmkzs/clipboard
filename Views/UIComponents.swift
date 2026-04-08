@@ -351,9 +351,7 @@ struct EditorTextView: NSViewRepresentable {
 
         let textView = EditorNSTextView()
         textView.delegate = context.coordinator
-        textView.font = .systemFont(ofSize: fontSize)
-        textView.textColor = .labelColor
-        textView.insertionPointColor = .labelColor
+        textView.applyEditorAppearance(fontSize: fontSize)
         textView.drawsBackground = false
         textView.isRichText = false
         textView.isAutomaticQuoteSubstitutionEnabled = false
@@ -406,9 +404,7 @@ struct EditorTextView: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         guard let textView = nsView.documentView as? EditorNSTextView else { return }
-        textView.font = .systemFont(ofSize: fontSize)
-        textView.textColor = .labelColor
-        textView.insertionPointColor = .labelColor
+        textView.applyEditorAppearance(fontSize: fontSize)
         textView.commitShortcut = commitShortcut
         textView.indentShortcut = indentShortcut
         textView.outdentShortcut = outdentShortcut
@@ -430,11 +426,20 @@ struct EditorTextView: NSViewRepresentable {
         textView.onResetZoom = onResetZoom
         context.coordinator.onSelectionChange = onSelectionChange
         if text != context.coordinator.lastSyncedText {
+            let preservedSelection = textView.selectedRange()
             textView.string = text
             context.coordinator.lastSyncedText = text
+            let textLength = (text as NSString).length
+            let selectionLocation = min(preservedSelection.location, textLength)
+            let selectionLength = min(preservedSelection.length, max(0, textLength - selectionLocation))
+            textView.setSelectedRange(NSRange(location: selectionLocation, length: selectionLength))
         }
-        if textView.frame.width != nsView.contentSize.width {
-            textView.frame = NSRect(origin: .zero, size: nsView.contentSize)
+        let desiredWidth = nsView.contentSize.width
+        if abs(textView.frame.width - desiredWidth) > 0.5 {
+            var frame = textView.frame
+            frame.size.width = desiredWidth
+            frame.size.height = max(frame.size.height, nsView.contentSize.height)
+            textView.frame = frame
         }
     }
 
@@ -487,6 +492,23 @@ enum MarkdownPreviewScrollSync {
         let totalLines = max(1, normalized.components(separatedBy: "\n").count)
         guard totalLines > 1 else { return 0 }
         return min(1, max(0, CGFloat(currentLineIndex) / CGFloat(totalLines - 1)))
+    }
+}
+
+private extension EditorNSTextView {
+    func applyEditorAppearance(fontSize: CGFloat) {
+        let desiredFont = NSFont.systemFont(ofSize: fontSize)
+        if font?.pointSize != desiredFont.pointSize {
+            font = desiredFont
+        }
+
+        let desiredTextColor = NSColor.labelColor
+        if textColor != desiredTextColor {
+            textColor = desiredTextColor
+        }
+        if insertionPointColor != desiredTextColor {
+            insertionPointColor = desiredTextColor
+        }
     }
 }
 
