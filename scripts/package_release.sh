@@ -28,6 +28,9 @@ COMMON_XCODEBUILD_ARGS=(
   -project "$PROJECT_PATH"
   -scheme "$SCHEME"
   -configuration Release
+  ENABLE_CODE_COVERAGE=NO
+  CLANG_COVERAGE_MAPPING=NO
+  CLANG_ENABLE_CODE_COVERAGE=NO
   CODE_SIGNING_ALLOWED="${CODE_SIGNING_ALLOWED:-NO}"
   CODE_SIGNING_REQUIRED="${CODE_SIGNING_REQUIRED:-NO}"
 )
@@ -99,6 +102,11 @@ package_dmg() {
     "$output_dmg" >/dev/null
 }
 
+strip_release_binary() {
+  local executable_path="$1"
+  strip -S "$executable_path"
+}
+
 make_arch_build() {
   local source_app="$1"
   local source_exec="$2"
@@ -107,6 +115,7 @@ make_arch_build() {
   mkdir -p "$(dirname "$bundle_dir")"
   cp -R "$source_app" "$bundle_dir"
   cp "$source_exec" "$bundle_dir/Contents/MacOS/$EXECUTABLE_NAME"
+  strip_release_binary "$bundle_dir/Contents/MacOS/$EXECUTABLE_NAME"
   codesign --force --sign "$SIGN_IDENTITY" -o runtime --timestamp=none --deep "$bundle_dir"
   package_zip "$bundle_dir" "$OUTPUT_DIR/ClipboardHistory-mac-$slug.zip"
 }
@@ -114,6 +123,7 @@ make_arch_build() {
 mkdir -p "$(dirname "$UNIVERSAL_APP")"
 cp -R "$ARM64_APP" "$UNIVERSAL_APP"
 lipo -create "$ARM64_EXEC" "$X86_64_EXEC" -output "$UNIVERSAL_EXEC"
+strip_release_binary "$UNIVERSAL_EXEC"
 codesign --force --sign "$SIGN_IDENTITY" -o runtime --timestamp=none --deep "$UNIVERSAL_APP"
 package_zip "$UNIVERSAL_APP" "$OUTPUT_DIR/ClipboardHistory-mac-universal.zip"
 package_dmg "$UNIVERSAL_APP" "$OUTPUT_DIR/$DMG_NAME"
