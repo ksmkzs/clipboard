@@ -1,6 +1,7 @@
 import AppKit
 import Carbon
 import CryptoKit
+import Darwin
 import ServiceManagement
 import SwiftData
 import SwiftUI
@@ -324,6 +325,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     private var helpRequestObserver: NSObjectProtocol?
     private var validationCommandObserver: NSObjectProtocol?
     private var validationAttachedSheetContext: ValidationAttachedSheetContext?
+    private let codexOpenRequestMonitorQueue = DispatchQueue(
+        label: "ClipboardHistory.CodexOpenRequestMonitor",
+        qos: .userInitiated
+    )
+    private var codexOpenRequestMonitor: DispatchSourceFileSystemObject?
+    private var codexOpenRequestMonitorFileDescriptor: Int32 = -1
     private var codexOpenRequestTimer: DispatchSourceTimer?
     private var codexSessionStateMonitor: DispatchSourceTimer?
     private var suppressPanelAutoClose = false
@@ -429,6 +436,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             || environment["XCTestBundlePath"] != nil
     }
 
+    @MainActor
+    static let sharedModelContainer: ModelContainer = {
+        if isRunningAutomatedTests {
+            let schema = Schema([ClipboardItem.self])
+            let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+            return try! ModelContainer(for: schema, configurations: [configuration])
+        }
+        return try! ClipboardStoreBootstrapper.makeContainer()
+    }()
+
     static func shouldStartLocalHistoryServices(isRunningAutomatedTests: Bool) -> Bool {
         !isRunningAutomatedTests
     }
@@ -507,6 +524,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         translateHotKeyShortcut = settings.translationShortcut
 
         sharedContainer = getModelContainer()
+        guard Self.shouldStartLocalHistoryServices(isRunningAutomatedTests: Self.isRunningAutomatedTests) else {
+            return
+        }
+
+        fileLocalHistoryManager = FileLocalHistoryManager(storePaths: storePaths)
+        _ = try? makeCodexIntegrationManager().refreshInstalledHelperIfNeeded()
+        startCodexOpenRequestMonitor()
         dataManager = ClipboardDataManager(
             modelContext: ModelContext(sharedContainer),
             maxHistoryItems: settings.historyLimit,
@@ -517,15 +541,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         clipboardController.shouldHandleKeyboardCopyEvent = { [weak self] in
             self != nil
         }
-
         setupPanel()
         observeHelpRequests()
-
-        guard Self.shouldStartLocalHistoryServices(isRunningAutomatedTests: Self.isRunningAutomatedTests) else {
-            return
-        }
-
-        fileLocalHistoryManager = FileLocalHistoryManager(storePaths: storePaths)
         applyLocalFileHistorySettings()
         requestAccessibilityPermissions()
         syncLaunchAtLoginState()
@@ -533,7 +550,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         setupValidationCommandObserverIfRequested()
         registerHotKeys()
         clipboardController.startMonitoring()
-        startCodexOpenRequestMonitor()
         performLaunchAutomationIfRequested()
 
         let launchFileURLs = ProcessInfo.processInfo.arguments
@@ -555,8 +571,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     }
 
     private func startCodexOpenRequestMonitor() {
+        stopCodexOpenRequestMonitor()
+        try? storePaths.ensureDirectories()
+        let directoryPath = storePaths.codexRequestDirectory.path
+        let fileDescriptor = open(directoryPath, O_EVTONLY)
+        if fileDescriptor >= 0 {
+            let source = DispatchSource.makeFileSystemObjectSource(
+                fileDescriptor: fileDescriptor,
+                eventMask: [.write, .extend, .rename, .delete, .attrib],
+                queue: codexOpenRequestMonitorQueue
+            )
+            source.setEventHandler { [weak self] in
+                self?.consumeCodexOpenRequestIfNeeded()
+            }
+            source.setCancelHandler {
+                close(fileDescriptor)
+            }
+            codexOpenRequestMonitorFileDescriptor = fileDescriptor
+            codexOpenRequestMonitor = source
+            source.resume()
+            consumeCodexOpenRequestIfNeeded()
+            return
+        }
+
+        // Fall back to polling only if directory watching is unavailable.
         codexOpenRequestTimer?.cancel()
-        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+        let timer = DispatchSource.makeTimerSource(queue: codexOpenRequestMonitorQueue)
         timer.schedule(deadline: .now() + 0.05, repeating: 0.05)
         timer.setEventHandler { [weak self] in
             self?.consumeCodexOpenRequestIfNeeded()
@@ -564,6 +604,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         codexOpenRequestTimer = timer
         timer.resume()
         consumeCodexOpenRequestIfNeeded()
+    }
+
+    private func stopCodexOpenRequestMonitor() {
+        codexOpenRequestMonitorFileDescriptor = -1
+        codexOpenRequestMonitor?.cancel()
+        codexOpenRequestMonitor = nil
+        codexOpenRequestTimer?.cancel()
+        codexOpenRequestTimer = nil
     }
 
     private func setupValidationCommandObserverIfRequested() {
@@ -1316,12 +1364,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     
     @MainActor
     private func getModelContainer() -> ModelContainer {
-        if Self.isRunningAutomatedTests {
-            let schema = Schema([ClipboardItem.self])
-            let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
-            return try! ModelContainer(for: schema, configurations: [configuration])
-        }
-        return try! ClipboardStoreBootstrapper.makeContainer()
+        Self.sharedModelContainer
     }
     
     private func requestAccessibilityPermissions() {

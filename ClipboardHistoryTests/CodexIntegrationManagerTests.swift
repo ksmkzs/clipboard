@@ -68,6 +68,31 @@ final class CodexIntegrationManagerTests: XCTestCase {
         XCTAssertTrue(helperContent.contains("/bin/sleep 0.05"))
     }
 
+    func testRefreshInstalledHelperRewritesLegacyScript() throws {
+        try storePaths.ensureDirectories()
+        try "#!/bin/zsh\n/bin/sleep 0.2\n".write(
+            to: storePaths.codexHelperScriptURL,
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let manager = makeManager()
+        let refreshed = try manager.refreshInstalledHelperIfNeeded()
+
+        let helperContent = try String(contentsOf: storePaths.codexHelperScriptURL, encoding: .utf8)
+        XCTAssertTrue(refreshed)
+        XCTAssertTrue(helperContent.contains("/bin/sleep 0.05"))
+    }
+
+    func testRefreshInstalledHelperSkipsWhenHelperIsAbsent() throws {
+        let manager = makeManager()
+
+        let refreshed = try manager.refreshInstalledHelperIfNeeded()
+
+        XCTAssertFalse(refreshed)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: storePaths.codexHelperScriptURL.path))
+    }
+
     func testInstallRejectsUnmanagedEditorExport() throws {
         try "export EDITOR='/usr/bin/vim'\n".write(to: shellConfigURL, atomically: true, encoding: .utf8)
 

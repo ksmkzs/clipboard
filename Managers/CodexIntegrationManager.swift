@@ -75,6 +75,16 @@ struct CodexIntegrationManager {
         return status(inspectShellConfig: true)
     }
 
+    @discardableResult
+    func refreshInstalledHelperIfNeeded() throws -> Bool {
+        guard fileManager.fileExists(atPath: storePaths.codexHelperScriptURL.path) else {
+            return false
+        }
+        try storePaths.ensureDirectories(fileManager: fileManager)
+        try installHelperScript(at: storePaths.codexHelperScriptURL)
+        return true
+    }
+
     private func installHelperScript(at helperURL: URL) throws {
         let script = """
         #!/bin/zsh
