@@ -2087,8 +2087,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             return
         }
 
-        let _ = targetPID
+        if let targetPID {
+            copyExternalSelectedText(
+                feedbackMessage: feedbackMessage,
+                targetPID: targetPID,
+                transform: transform
+            )
+            return
+        }
+
         NSSound.beep()
+    }
+
+    private func copyExternalSelectedText(
+        feedbackMessage: String,
+        targetPID: pid_t,
+        transform: @escaping (String) -> String
+    ) {
+        let pasteboard = NSPasteboard.general
+        let previousChangeCount = pasteboard.changeCount
+        PasteSynthesizer.simulateCmdC(targetPID: targetPID)
+
+        resolveExternalCopiedText(
+            previousChangeCount: previousChangeCount,
+            attemptsRemaining: 6,
+            feedbackMessage: feedbackMessage,
+            transform: transform
+        )
+    }
+
+    private func resolveExternalCopiedText(
+        previousChangeCount: Int,
+        attemptsRemaining: Int,
+        feedbackMessage: String,
+        transform: @escaping (String) -> String
+    ) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self else { return }
+
+            let pasteboard = NSPasteboard.general
+            let sourceText = GlobalTransformCopyPolicy.resolvedCopiedText(
+                ExternalSelectionCopySnapshot(
+                    previousChangeCount: previousChangeCount,
+                    currentChangeCount: pasteboard.changeCount,
+                    copiedText: pasteboard.string(forType: .string)
+                )
+            )
+
+            if let sourceText {
+                _ = self.copyTextToClipboard(
+                    transform(sourceText),
+                    feedbackMessage: feedbackMessage,
+                    forceFloatingFeedback: true,
+                    storeInHistory: true,
+                    feedbackStyle: self.floatingFeedbackStyle(for: feedbackMessage)
+                )
+                return
+            }
+
+            guard attemptsRemaining > 0 else {
+                NSSound.beep()
+                return
+            }
+
+            self.resolveExternalCopiedText(
+                previousChangeCount: previousChangeCount,
+                attemptsRemaining: attemptsRemaining - 1,
+                feedbackMessage: feedbackMessage,
+                transform: transform
+            )
+        }
     }
     
     private func pasteSelectedItem(_ item: ClipboardItem) {

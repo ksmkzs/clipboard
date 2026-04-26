@@ -25,6 +25,12 @@ struct GlobalTransformRoutingSnapshot: Equatable {
     let frontmostExternalPID: pid_t?
 }
 
+struct ExternalSelectionCopySnapshot: Equatable {
+    let previousChangeCount: Int
+    let currentChangeCount: Int
+    let copiedText: String?
+}
+
 enum GlobalTransformRoute: Equatable {
     case editor(EditorSessionID)
     case panel
@@ -48,6 +54,18 @@ enum GlobalTransformRoutingPolicy {
         case .settings, .help, .none:
             return .externalSelection(snapshot.frontmostExternalPID)
         }
+    }
+}
+
+enum GlobalTransformCopyPolicy {
+    static func resolvedCopiedText(_ snapshot: ExternalSelectionCopySnapshot) -> String? {
+        guard snapshot.currentChangeCount != snapshot.previousChangeCount,
+              let copiedText = snapshot.copiedText,
+              !copiedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+
+        return copiedText
     }
 }
 

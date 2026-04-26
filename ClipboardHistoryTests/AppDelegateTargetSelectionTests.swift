@@ -194,6 +194,42 @@ final class AppDelegateTargetSelectionTests: XCTestCase {
         XCTAssertNil(resolved)
     }
 
+    func testExternalSelectionCopyPolicyRequiresPasteboardChange() {
+        let resolved = GlobalTransformCopyPolicy.resolvedCopiedText(
+            ExternalSelectionCopySnapshot(
+                previousChangeCount: 10,
+                currentChangeCount: 10,
+                copiedText: "selected text"
+            )
+        )
+
+        XCTAssertNil(resolved)
+    }
+
+    func testExternalSelectionCopyPolicyUsesCopiedTextAfterPasteboardChange() {
+        let resolved = GlobalTransformCopyPolicy.resolvedCopiedText(
+            ExternalSelectionCopySnapshot(
+                previousChangeCount: 10,
+                currentChangeCount: 11,
+                copiedText: "line one\nline two"
+            )
+        )
+
+        XCTAssertEqual(resolved, "line one\nline two")
+    }
+
+    func testExternalSelectionCopyPolicyRejectsBlankCopiedText() {
+        let resolved = GlobalTransformCopyPolicy.resolvedCopiedText(
+            ExternalSelectionCopySnapshot(
+                previousChangeCount: 10,
+                currentChangeCount: 11,
+                copiedText: " \n "
+            )
+        )
+
+        XCTAssertNil(resolved)
+    }
+
     func testResolvedStandaloneMarkdownPreviewVisibilityDefaultsOff() {
         XCTAssertFalse(
             AppDelegate.resolvedStandaloneMarkdownPreviewVisibility(
