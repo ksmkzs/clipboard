@@ -944,7 +944,7 @@ struct ClipboardHistoryView: View {
     }
 
     private func copyJoinedWithSpacesSelectedItem() {
-        copyTransformedSelectedText(actionName: "Joined with spaces") { text in
+        copyTransformedSelectedText(actionName: "Half Join") { text in
             joinLinesText(text, strategy: .replaceWithSpace)
         }
     }
@@ -1155,7 +1155,7 @@ struct ClipboardHistoryView: View {
     }
 
     private func joinSelectedItemLinesWithSpaces() {
-        applyTextTransformToSelectedItem(actionName: "Joined with spaces") { text in
+        applyTextTransformToSelectedItem(actionName: "Half Join") { text in
             joinLinesText(text, strategy: .replaceWithSpace)
         }
     }
@@ -1358,7 +1358,7 @@ private struct ClipboardHeaderSection: View {
             )
             shortcutHint(
                 icon: "link.badge.plus",
-                label: t("One Line + Space", "一文化+空白"),
+                label: t("Half Join", "半角Join"),
                 key: HotKeyManager.displayString(for: settings.joinLinesWithSpacesShortcut)
             )
             shortcutHint(
@@ -1389,7 +1389,7 @@ private struct ClipboardHeaderSection: View {
             shortcutHint(icon: "sidebar.right", label: t("Pins", "ピン表示"), key: "Tab")
             shortcutHint(icon: "terminal", label: t("Normalize", "整形"), key: HotKeyManager.displayString(for: settings.copyNormalizedShortcut))
             shortcutHint(icon: "link", label: t("One Line", "一文化"), key: HotKeyManager.displayString(for: settings.copyJoinedShortcut))
-            shortcutHint(icon: "link.badge.plus", label: t("One Line + Space", "一文化+空白"), key: HotKeyManager.displayString(for: settings.copyJoinedWithSpacesShortcut))
+            shortcutHint(icon: "link.badge.plus", label: t("Half Join", "半角Join"), key: HotKeyManager.displayString(for: settings.copyJoinedWithSpacesShortcut))
         }
     }
 
@@ -1472,7 +1472,7 @@ enum ClipboardHelpCatalog {
             .init(title: t("Pins", "ピン表示", language: settings.settingsLanguage), shortcut: "Tab", symbolName: "sidebar.right"),
             .init(title: t("Normalize", "整形", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.copyNormalizedShortcut), symbolName: "terminal"),
             .init(title: t("One Line", "一文化", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.copyJoinedShortcut), symbolName: "link.circle"),
-            .init(title: t("One Line + Space", "一文化+空白", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.copyJoinedWithSpacesShortcut), symbolName: "link.badge.plus")
+            .init(title: t("Half Join", "半角Join", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.copyJoinedWithSpacesShortcut), symbolName: "link.badge.plus")
         ]
     }
 
@@ -1487,7 +1487,7 @@ enum ClipboardHelpCatalog {
             .init(title: t("Markdown Preview", "Markdown プレビュー", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.toggleMarkdownPreviewShortcut), symbolName: "doc.richtext"),
             .init(title: t("Normalize", "整形", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.normalizeForCommandShortcut), symbolName: "terminal"),
             .init(title: t("One Line", "一文化", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.joinLinesShortcut), symbolName: "link.circle"),
-            .init(title: t("One Line + Space", "一文化+空白", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.joinLinesWithSpacesShortcut), symbolName: "link.badge.plus")
+            .init(title: t("Half Join", "半角Join", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.joinLinesWithSpacesShortcut), symbolName: "link.badge.plus")
         ]
     }
 
@@ -1503,7 +1503,7 @@ enum ClipboardHelpCatalog {
             .init(title: t("Show or hide pinned items", "ピン留めした項目の表示 / 非表示", language: settings.settingsLanguage), shortcut: "Tab", symbolName: "sidebar.right"),
             .init(title: t("Normalize the focused item", "フォーカス中の項目を整形", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.copyNormalizedShortcut), symbolName: "terminal"),
             .init(title: t("Turn the focused item into one line", "フォーカス中の項目を一文化", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.copyJoinedShortcut), symbolName: "link.circle"),
-            .init(title: t("Join focused item with spaces", "フォーカス中の項目を空白区切りで一文化", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.copyJoinedWithSpacesShortcut), symbolName: "link.badge.plus")
+            .init(title: t("Half Join focused item", "フォーカス項目を半角Join", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.copyJoinedWithSpacesShortcut), symbolName: "link.badge.plus")
         ]
         return commands
     }
@@ -1519,7 +1519,7 @@ enum ClipboardHelpCatalog {
             .init(title: t("Markdown preview", "Markdown プレビュー", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.toggleMarkdownPreviewShortcut), symbolName: "doc.richtext"),
             .init(title: t("Normalize selection whitespace", "選択中の項目の空白を整形", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.normalizeForCommandShortcut), symbolName: "terminal"),
             .init(title: t("Join selection into one sentence", "選択中の項目を一文に整形", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.joinLinesShortcut), symbolName: "link.circle"),
-            .init(title: t("Join selection with spaces", "選択中の項目を空白区切りで一文化", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.joinLinesWithSpacesShortcut), symbolName: "link.badge.plus")
+            .init(title: t("Half Join selection", "選択範囲を半角Join", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.joinLinesWithSpacesShortcut), symbolName: "link.badge.plus")
         ]
         return commands
     }
@@ -1537,7 +1537,7 @@ enum ClipboardHelpCatalog {
                 symbolName: "link.circle"
             ),
             .init(
-                title: t("Replace clipboard with space-joined text", "クリップボード内容を空白区切りで一文化して上書き", language: settings.settingsLanguage),
+                title: t("Half Join clipboard", "クリップボードを半角Join", language: settings.settingsLanguage),
                 shortcut: displayString(for: settings.globalCopyJoinedWithSpacesShortcut, enabled: settings.globalCopyJoinedWithSpacesEnabled, language: settings.settingsLanguage),
                 symbolName: "link.badge.plus"
             )
@@ -2359,7 +2359,7 @@ struct StandaloneNoteEditorView: View {
             )
             ShortcutHintView(
                 icon: "link.badge.plus",
-                label: t("One Line + Space", "一文化+空白"),
+                label: t("Half Join", "半角Join"),
                 key: HotKeyManager.displayString(for: appDelegate.settings.joinLinesWithSpacesShortcut),
                 zoomScale: zoomScale,
                 primaryTextColor: theme.primaryText,

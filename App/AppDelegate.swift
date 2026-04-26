@@ -264,7 +264,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             },
             runGlobalCopyJoinedWithSpaces: { [weak self] in
                 self?.copySelectedTextFromCurrentContext(
-                    feedbackMessage: "One Line + Space",
+                    feedbackMessage: "Half Join",
                     transform: { text in
                         joinLinesText(text, strategy: .replaceWithSpace)
                     }
@@ -1687,7 +1687,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
                 self.handleGlobalTransformShortcut(
                     editorCommand: .joinLinesWithSpaces,
                     panelAction: "joinWithSpaces",
-                    feedbackMessage: "Joined with spaces",
+                    feedbackMessage: "Half Join",
                     transform: { text in
                         joinLinesText(text, strategy: .replaceWithSpace)
                     }

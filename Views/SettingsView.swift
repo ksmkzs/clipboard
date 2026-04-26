@@ -416,7 +416,7 @@ struct SettingsView: View {
                         isOn: $draftSettings.globalCopyJoinedEnabled
                     )
                     Toggle(
-                        t("Enable global clipboard space join", "グローバルの空白区切り一文化を有効化"),
+                        t("Enable global Half Join", "グローバルHalf Joinを有効化"),
                         isOn: $draftSettings.globalCopyJoinedWithSpacesEnabled
                     )
                     Toggle(
@@ -429,7 +429,7 @@ struct SettingsView: View {
                         shortcut: optionalBinding(for: .globalCopyJoined)
                     )
                     optionalShortcutRow(
-                        title: t("Replace clipboard with space-joined text", "クリップボード内容を空白区切りで一文化して上書き"),
+                        title: t("Half Join clipboard", "クリップボードを半角Join"),
                         target: .globalCopyJoinedWithSpaces,
                         shortcut: optionalBinding(for: .globalCopyJoinedWithSpaces)
                     )
@@ -482,7 +482,7 @@ struct SettingsView: View {
                         shortcut: binding(for: .copyJoined)
                     )
                     shortcutRow(
-                        title: t("Join item with spaces", "選択中の項目を空白区切りで一文化"),
+                        title: t("Half Join item", "項目を半角Join"),
                         target: .copyJoinedWithSpaces,
                         shortcut: binding(for: .copyJoinedWithSpaces)
                     )
@@ -530,7 +530,7 @@ struct SettingsView: View {
                         shortcut: binding(for: .joinLines)
                     )
                     shortcutRow(
-                        title: t("Join with spaces", "空白区切りで一文化"),
+                        title: t("Half Join", "半角Join"),
                         target: .joinLinesWithSpaces,
                         shortcut: binding(for: .joinLinesWithSpaces)
                     )
@@ -884,7 +884,7 @@ struct SettingsView: View {
         case .globalCopyJoined:
             return t("Replace clipboard with one-line text", "クリップボード内容を一文化して上書き")
         case .globalCopyJoinedWithSpaces:
-            return t("Replace clipboard with space-joined text", "クリップボード内容を空白区切りで一文化して上書き")
+            return t("Half Join clipboard", "クリップボードを半角Join")
         case .globalCopyNormalized:
             return t("Replace clipboard with normalized text", "クリップボード内容を整形して上書き")
         case .newNote:
@@ -914,7 +914,7 @@ struct SettingsView: View {
         case .copyJoined:
             return t("Transform item into one sentence", "選択中の項目を一文に整形")
         case .copyJoinedWithSpaces:
-            return t("Join item with spaces", "選択中の項目を空白区切りで一文化")
+            return t("Half Join item", "項目を半角Join")
         case .copyNormalized:
             return t("Normalize item whitespace", "選択中の項目の空白を整形")
         case .toggleMarkdownPreview:
@@ -922,7 +922,7 @@ struct SettingsView: View {
         case .joinLines:
             return t("Join into one sentence", "選択中の項目を一文に整形")
         case .joinLinesWithSpaces:
-            return t("Join with spaces", "空白区切りで一文化")
+            return t("Half Join", "半角Join")
         case .normalizeForCommand:
             return t("Normalize whitespace", "選択中の項目の空白を整形")
         case .orphanCodexDiscard:
@@ -1346,7 +1346,7 @@ struct SettingsView: View {
                 ] + [
                     (t("New note from anywhere", "どこからでも新規作成"), draft.globalNewNoteShortcut),
                     (t("Replace clipboard with one-line text", "クリップボード内容を一文化して上書き"), draft.globalCopyJoinedEnabled ? draft.globalCopyJoinedShortcut : nil),
-                    (t("Replace clipboard with space-joined text", "クリップボード内容を空白区切りで一文化して上書き"), draft.globalCopyJoinedWithSpacesEnabled ? draft.globalCopyJoinedWithSpacesShortcut : nil),
+                    (t("Half Join clipboard", "クリップボードを半角Join"), draft.globalCopyJoinedWithSpacesEnabled ? draft.globalCopyJoinedWithSpacesShortcut : nil),
                     (t("Replace clipboard with normalized text", "クリップボード内容を整形して上書き"), draft.globalCopyNormalizedEnabled ? draft.globalCopyNormalizedShortcut : nil)
                 ].compactMap { title, shortcut in
                     shortcut.map { (title, $0) }
@@ -1363,7 +1363,7 @@ struct SettingsView: View {
                     (t("Undo", "元に戻す"), draft.undoShortcut),
                     (t("Redo", "やり直し"), draft.redoShortcut),
                     (t("Transform item into one sentence", "選択中の項目を一文に整形"), draft.copyJoinedShortcut),
-                    (t("Join item with spaces", "選択中の項目を空白区切りで一文化"), draft.copyJoinedWithSpacesShortcut),
+                    (t("Half Join item", "項目を半角Join"), draft.copyJoinedWithSpacesShortcut),
                     (t("Normalize item whitespace", "選択中の項目の空白を整形"), draft.copyNormalizedShortcut)
                 ]
             ),
@@ -1377,7 +1377,7 @@ struct SettingsView: View {
                     (t("Move line down", "行を下へ移動"), draft.moveLineDownShortcut),
                     (t("Markdown preview", "Markdown プレビュー"), draft.toggleMarkdownPreviewShortcut),
                     (t("Join into one sentence", "選択中の項目を一文に整形"), draft.joinLinesShortcut),
-                    (t("Join with spaces", "空白区切りで一文化"), draft.joinLinesWithSpacesShortcut),
+                    (t("Half Join", "半角Join"), draft.joinLinesWithSpacesShortcut),
                     (t("Normalize whitespace", "選択中の項目の空白を整形"), draft.normalizeForCommandShortcut)
                 ]
             ),

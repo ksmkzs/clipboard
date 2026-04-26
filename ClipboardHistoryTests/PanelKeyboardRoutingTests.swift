@@ -303,7 +303,7 @@ final class ClipboardHelpCatalogTests: XCTestCase {
         XCTAssertTrue(titles.contains("Delete"))
         XCTAssertTrue(titles.contains("Pins"))
         XCTAssertTrue(titles.contains("One Line"))
-        XCTAssertTrue(titles.contains("One Line + Space"))
+        XCTAssertTrue(titles.contains("Half Join"))
         XCTAssertTrue(titles.contains("Normalize"))
     }
 
@@ -319,7 +319,7 @@ final class ClipboardHelpCatalogTests: XCTestCase {
         XCTAssertTrue(titles.contains("Move Line"))
         XCTAssertTrue(titles.contains("Markdown Preview"))
         XCTAssertTrue(titles.contains("One Line"))
-        XCTAssertTrue(titles.contains("One Line + Space"))
+        XCTAssertTrue(titles.contains("Half Join"))
         XCTAssertTrue(titles.contains("Normalize"))
     }
 
@@ -337,7 +337,7 @@ final class ClipboardHelpCatalogTests: XCTestCase {
         XCTAssertTrue(titles.contains("Show or hide pinned items"))
         XCTAssertTrue(titles.contains("Normalize the focused item"))
         XCTAssertTrue(titles.contains("Turn the focused item into one line"))
-        XCTAssertTrue(titles.contains("Join focused item with spaces"))
+        XCTAssertTrue(titles.contains("Half Join focused item"))
     }
 
     func testEditorHelpCatalogIncludesPrimaryEditorActions() {
@@ -353,7 +353,7 @@ final class ClipboardHelpCatalogTests: XCTestCase {
         XCTAssertTrue(titles.contains("Markdown preview"))
         XCTAssertTrue(titles.contains("Normalize selection whitespace"))
         XCTAssertTrue(titles.contains("Join selection into one sentence"))
-        XCTAssertTrue(titles.contains("Join selection with spaces"))
+        XCTAssertTrue(titles.contains("Half Join selection"))
     }
 
     func testOutsideWindowHelpCatalogIncludesCopyTransformsOnly() {
@@ -363,7 +363,7 @@ final class ClipboardHelpCatalogTests: XCTestCase {
         XCTAssertEqual(commands.count, 3)
         XCTAssertTrue(titles.contains("Replace clipboard with normalized text"))
         XCTAssertTrue(titles.contains("Replace clipboard with one-line text"))
-        XCTAssertTrue(titles.contains("Replace clipboard with space-joined text"))
+        XCTAssertTrue(titles.contains("Half Join clipboard"))
     }
 
     func testHelpCatalogLocalizesNormalizeByLanguage() {
