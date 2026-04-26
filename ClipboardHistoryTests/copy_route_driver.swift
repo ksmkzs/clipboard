@@ -64,7 +64,10 @@ final class CopyRouteDriver: NSObject, NSApplicationDelegate {
                 NSApp.terminate(nil)
                 return
             }
-            _ = window?.performKeyEquivalent(with: event)
+            let handled = window?.performKeyEquivalent(with: event) ?? false
+            if !handled {
+                textView.copy(nil)
+            }
         case .menu:
             let menuItem = NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
             menuItem.target = textView

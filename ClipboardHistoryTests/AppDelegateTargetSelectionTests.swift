@@ -3,7 +3,7 @@ import XCTest
 
 final class AppDelegateTargetSelectionTests: XCTestCase {
     func testPrefersFrontmostAppOverStalePlacementAndPrevious() {
-        let decision = AppDelegate.TargetAppDecision(
+        let decision = PlacementTargetDecision(
             frontmostPID: 200,
             placementPID: 100,
             previousPID: 100,
@@ -13,11 +13,11 @@ final class AppDelegateTargetSelectionTests: XCTestCase {
             previousTerminated: false
         )
 
-        XCTAssertEqual(AppDelegate.preferredTargetPID(for: decision), 200)
+        XCTAssertEqual(PasteTargetingService.preferredPlacementTargetPID(for: decision), 200)
     }
 
     func testFallsBackToPlacementWhenFrontmostIsCurrentApp() {
-        let decision = AppDelegate.TargetAppDecision(
+        let decision = PlacementTargetDecision(
             frontmostPID: 999,
             placementPID: 100,
             previousPID: 50,
@@ -27,11 +27,11 @@ final class AppDelegateTargetSelectionTests: XCTestCase {
             previousTerminated: false
         )
 
-        XCTAssertEqual(AppDelegate.preferredTargetPID(for: decision), 100)
+        XCTAssertEqual(PasteTargetingService.preferredPlacementTargetPID(for: decision), 100)
     }
 
     func testFallsBackToPreviousWhenFrontmostAndPlacementUnavailable() {
-        let decision = AppDelegate.TargetAppDecision(
+        let decision = PlacementTargetDecision(
             frontmostPID: nil,
             placementPID: 100,
             previousPID: 50,
@@ -41,11 +41,11 @@ final class AppDelegateTargetSelectionTests: XCTestCase {
             previousTerminated: false
         )
 
-        XCTAssertEqual(AppDelegate.preferredTargetPID(for: decision), 50)
+        XCTAssertEqual(PasteTargetingService.preferredPlacementTargetPID(for: decision), 50)
     }
 
     func testReturnsNilWhenOnlyCurrentAppExists() {
-        let decision = AppDelegate.TargetAppDecision(
+        let decision = PlacementTargetDecision(
             frontmostPID: 999,
             placementPID: 999,
             previousPID: 999,
@@ -55,11 +55,11 @@ final class AppDelegateTargetSelectionTests: XCTestCase {
             previousTerminated: false
         )
 
-        XCTAssertNil(AppDelegate.preferredTargetPID(for: decision))
+        XCTAssertNil(PasteTargetingService.preferredPlacementTargetPID(for: decision))
     }
 
     func testHelpPanelPlacementUsesRightSideWhenSpaceExists() {
-        let placement = AppDelegate.helpPanelPlacement(
+        let placement = WindowShellPolicy.helpPanelPlacement(
             for: NSRect(x: 100, y: 120, width: 320, height: 420),
             within: NSRect(x: 20, y: 20, width: 1200, height: 800),
             helpSize: NSSize(width: 400, height: 420),
@@ -71,7 +71,7 @@ final class AppDelegateTargetSelectionTests: XCTestCase {
     }
 
     func testHelpPanelPlacementUsesLeftSideWhenRightSideWouldOverlapEdge() {
-        let placement = AppDelegate.helpPanelPlacement(
+        let placement = WindowShellPolicy.helpPanelPlacement(
             for: NSRect(x: 860, y: 120, width: 320, height: 420),
             within: NSRect(x: 20, y: 20, width: 1200, height: 800),
             helpSize: NSSize(width: 340, height: 420),
@@ -83,7 +83,7 @@ final class AppDelegateTargetSelectionTests: XCTestCase {
     }
 
     func testHelpPanelPlacementCentersWhenNeitherSideFits() {
-        let placement = AppDelegate.helpPanelPlacement(
+        let placement = WindowShellPolicy.helpPanelPlacement(
             for: NSRect(x: 160, y: 80, width: 320, height: 420),
             within: NSRect(x: 20, y: 20, width: 640, height: 560),
             helpSize: NSSize(width: 420, height: 420),
@@ -96,7 +96,7 @@ final class AppDelegateTargetSelectionTests: XCTestCase {
     }
 
     func testAuxiliaryWindowPlacementStaysInsideVisibleFrameWhenRightSideWouldOverflow() {
-        let frame = AppDelegate.auxiliaryWindowPlacement(
+        let frame = WindowShellPolicy.auxiliaryWindowPlacement(
             anchorFrame: NSRect(x: 1040, y: 120, width: 320, height: 420),
             visibleFrame: NSRect(x: 20, y: 20, width: 1280, height: 820),
             windowSize: NSSize(width: 620, height: 560),
@@ -274,17 +274,759 @@ final class AppDelegateTargetSelectionTests: XCTestCase {
 
     func testPanelToggleActionOnlyClosesWhenPanelIsFrontmost() {
         XCTAssertEqual(
-            AppDelegate.panelToggleAction(isVisible: false, isFrontmost: false),
+            WindowShellPolicy.panelToggleAction(isVisible: false, isFrontmost: false),
             .showOrRaise
         )
         XCTAssertEqual(
-            AppDelegate.panelToggleAction(isVisible: true, isFrontmost: false),
+            WindowShellPolicy.panelToggleAction(isVisible: true, isFrontmost: false),
             .showOrRaise
         )
         XCTAssertEqual(
-            AppDelegate.panelToggleAction(isVisible: true, isFrontmost: true),
+            WindowShellPolicy.panelToggleAction(isVisible: true, isFrontmost: true),
             .close
         )
+    }
+
+    func testPanelHotKeyRoutingTogglesPanelWhenSettingsHidden() {
+        XCTAssertEqual(
+            WindowShellPolicy.panelHotKeyRouting(
+                settingsVisible: false,
+                settingsShortcutCaptureActive: false
+            ),
+            .togglePanel
+        )
+    }
+
+    func testPanelHotKeyRoutingRaisesSettingsWhenSettingsVisible() {
+        XCTAssertEqual(
+            WindowShellPolicy.panelHotKeyRouting(
+                settingsVisible: true,
+                settingsShortcutCaptureActive: false
+            ),
+            .bringSettingsToFront
+        )
+    }
+
+    func testPanelHotKeyRoutingSuspendsRegistrationWhileCapturingSettingsShortcut() {
+        XCTAssertEqual(
+            WindowShellPolicy.panelHotKeyRouting(
+                settingsVisible: true,
+                settingsShortcutCaptureActive: true
+            ),
+            .suspendRegistration
+        )
+    }
+
+    func testPreferredPasteTargetPIDPrefersSnapshotOverPreviousAndPlacement() {
+        let decision = PasteTargetDecision(
+            snapshotPID: 300,
+            previousPID: 200,
+            placementPID: 100,
+            currentPID: 999,
+            snapshotTerminated: false,
+            previousTerminated: false,
+            placementTerminated: false
+        )
+
+        XCTAssertEqual(PasteTargetingService.preferredTargetPID(for: decision), 300)
+    }
+
+    func testPreferredPasteTargetPIDFallsBackToPreviousWhenSnapshotIsUnavailable() {
+        let decision = PasteTargetDecision(
+            snapshotPID: 300,
+            previousPID: 200,
+            placementPID: 100,
+            currentPID: 999,
+            snapshotTerminated: true,
+            previousTerminated: false,
+            placementTerminated: false
+        )
+
+        XCTAssertEqual(PasteTargetingService.preferredTargetPID(for: decision), 200)
+    }
+
+    func testPreferredPasteTargetPIDFallsBackToPlacementWhenSnapshotAndPreviousAreUnavailable() {
+        let decision = PasteTargetDecision(
+            snapshotPID: 300,
+            previousPID: 200,
+            placementPID: 100,
+            currentPID: 999,
+            snapshotTerminated: true,
+            previousTerminated: true,
+            placementTerminated: false
+        )
+
+        XCTAssertEqual(PasteTargetingService.preferredTargetPID(for: decision), 100)
+    }
+
+    func testGlobalTransformRoutingUsesExternalSelectionWhenEditorIsOnlyVisibleInBackground() {
+        let snapshot = GlobalTransformRoutingSnapshot(
+            appIsActive: true,
+            frontmostWindowKind: .settings,
+            activeEditorSessionID: EditorSessionID(rawValue: "editor-session"),
+            frontmostExternalPID: 777
+        )
+
+        XCTAssertEqual(
+            GlobalTransformRoutingPolicy.resolve(snapshot),
+            .externalSelection(777)
+        )
+    }
+
+    func testGlobalTransformRoutingTargetsFrontmostNoteEditorSession() {
+        let sessionID = EditorSessionID(rawValue: "note-editor-session")
+        let snapshot = GlobalTransformRoutingSnapshot(
+            appIsActive: true,
+            frontmostWindowKind: .noteEditor,
+            activeEditorSessionID: sessionID,
+            frontmostExternalPID: 777
+        )
+
+        XCTAssertEqual(
+            GlobalTransformRoutingPolicy.resolve(snapshot),
+            .editor(sessionID)
+        )
+    }
+
+    func testGlobalTransformRoutingTargetsFrontmostStandaloneSession() {
+        let sessionID = EditorSessionID(rawValue: "standalone-session")
+        let snapshot = GlobalTransformRoutingSnapshot(
+            appIsActive: true,
+            frontmostWindowKind: .standaloneNote,
+            activeEditorSessionID: sessionID,
+            frontmostExternalPID: 777
+        )
+
+        XCTAssertEqual(
+            GlobalTransformRoutingPolicy.resolve(snapshot),
+            .editor(sessionID)
+        )
+    }
+
+    func testGlobalTransformRoutingTargetsPanelOnlyWhenPanelIsFrontmost() {
+        let snapshot = GlobalTransformRoutingSnapshot(
+            appIsActive: true,
+            frontmostWindowKind: .panel,
+            activeEditorSessionID: EditorSessionID(rawValue: "editor-session"),
+            frontmostExternalPID: 777
+        )
+
+        XCTAssertEqual(
+            GlobalTransformRoutingPolicy.resolve(snapshot),
+            .panel
+        )
+    }
+
+    func testEditorCommandDispatcherDeliversCommandOnlyToRequestedSession() {
+        let dispatcher = EditorCommandDispatcher()
+        let noteSession = EditorSessionID(rawValue: "note")
+        let standaloneSession = EditorSessionID(rawValue: "standalone")
+        var received: [(String, EditorCommand, String?)] = []
+
+        _ = dispatcher.register(sessionID: noteSession) { command, payload in
+            received.append(("note", command, payload))
+        }
+        _ = dispatcher.register(sessionID: standaloneSession) { command, payload in
+            received.append(("standalone", command, payload))
+        }
+
+        XCTAssertTrue(dispatcher.dispatch(.joinLines, to: noteSession, payloadText: "payload"))
+        XCTAssertEqual(received.count, 1)
+        XCTAssertEqual(received.first?.0, "note")
+        XCTAssertEqual(received.first?.1, .joinLines)
+        XCTAssertEqual(received.first?.2, "payload")
+    }
+
+    func testEditorCommandDispatcherUnregisterRequiresMatchingToken() {
+        let dispatcher = EditorCommandDispatcher()
+        let session = EditorSessionID(rawValue: "note")
+        var received: [String] = []
+
+        let originalToken = dispatcher.register(sessionID: session) { _, _ in
+            received.append("original")
+        }
+        let replacementToken = dispatcher.register(sessionID: session) { _, _ in
+            received.append("replacement")
+        }
+
+        dispatcher.unregister(sessionID: session, token: originalToken)
+        XCTAssertTrue(dispatcher.dispatch(.normalizeForCommand, to: session))
+        XCTAssertEqual(received, ["replacement"])
+
+        dispatcher.unregister(sessionID: session, token: replacementToken)
+        XCTAssertFalse(dispatcher.dispatch(.normalizeForCommand, to: session))
+    }
+
+    func testValidationEditorSurfacePolicyPrefersKeyWindowOwner() {
+        let snapshot = ValidationEditorSurfaceSnapshot(
+            keyOrMainWindowKind: .standaloneNote,
+            noteEditorVisible: true,
+            standaloneNoteVisible: true
+        )
+
+        XCTAssertEqual(
+            ValidationEditorSurfacePolicy.resolve(snapshot),
+            .standaloneNote
+        )
+    }
+
+    func testValidationEditorSurfacePolicyFallsBackToVisibleNoteEditorBeforeStandalone() {
+        let snapshot = ValidationEditorSurfaceSnapshot(
+            keyOrMainWindowKind: .none,
+            noteEditorVisible: true,
+            standaloneNoteVisible: true
+        )
+
+        XCTAssertEqual(
+            ValidationEditorSurfacePolicy.resolve(snapshot),
+            .noteEditor
+        )
+    }
+
+    func testValidationCoordinatorRoutesSaveCommandToResolvedEditorSurface() {
+        var log: [String] = []
+        let coordinator = ValidationCoordinator(
+            applicationCallbacks: .init(
+                openPanel: { log.append("open-panel") },
+                togglePanelFromStatusItem: { log.append("toggle-panel") },
+                captureSnapshot: { _ in log.append("snapshot") },
+                captureWindowImage: { _, _ in log.append("image") },
+                openFile: { _ in log.append("open-file") },
+                openNewNote: { log.append("open-note") },
+                openSettings: { log.append("open-settings") },
+                openHelp: { log.append("open-help") },
+                runGlobalCopyJoined: { log.append("copy-joined") },
+                runGlobalCopyJoinedWithSpaces: { log.append("copy-joined-spaces") },
+                runGlobalCopyNormalized: { log.append("copy-normalized") },
+                inspectCodexIntegration: { log.append("inspect") },
+                resetValidationState: { log.append("reset") },
+                syncClipboardCapture: { log.append("sync") },
+                seedHistoryText: { _ in log.append("seed") },
+                reassertForegroundIfNeeded: { log.append("reassert") }
+            ),
+            panelCallbacks: .init(
+                postPanelAction: { action, text in
+                    log.append("panel:\(action):\(text ?? "")")
+                },
+                readTextFile: { _ in "" }
+            ),
+            editorCallbacks: .init(
+                currentSurface: { .standaloneNote },
+                readTextFile: { _ in "" },
+                postEditorCommand: { _, _ in log.append("command") },
+                saveNoteEditor: { log.append("save-note"); return true },
+                saveStandaloneNote: { log.append("save-standalone"); return true },
+                saveNoteEditorAs: { log.append("save-note-as"); return true },
+                saveStandaloneNoteAs: { log.append("save-standalone-as"); return true },
+                saveCurrentEditorToFile: { _ in log.append("save-file"); return true },
+                closeNoteEditor: { log.append("close-note") },
+                closeStandaloneNote: { log.append("close-standalone") },
+                respondToAttachedSheet: { _ in log.append("sheet") }
+            ),
+            previewCallbacks: .init(
+                setPreviewWidth: { _ in log.append("preview-width") },
+                setPreviewScroll: { _ in log.append("preview-scroll") },
+                syncPreviewScroll: { log.append("preview-sync") },
+                selectPreviewText: { _, _ in log.append("preview-select") },
+                copyPreviewSelection: { log.append("preview-copy") },
+                measurePreviewHorizontalOverflow: { log.append("preview-measure") },
+                clickPreviewFirstLink: { log.append("preview-click") },
+                respondToPreviewLinkPrompt: { _ in log.append("preview-prompt") }
+            ),
+            settingsCallbacks: .init(
+                increaseZoom: { log.append("zoom-increase") },
+                decreaseZoom: { log.append("zoom-decrease") },
+                resetZoom: { log.append("zoom-reset") },
+                setSettingsLanguage: { _ in log.append("language") },
+                setThemePreset: { _ in log.append("theme") },
+                setPanelShortcut: { _ in log.append("panel-shortcut") },
+                setToggleMarkdownPreviewShortcut: { _ in log.append("preview-shortcut") },
+                setGlobalCopyJoinedEnabled: { _ in log.append("joined-toggle") },
+                setGlobalCopyJoinedWithSpacesEnabled: { _ in log.append("joined-spaces-toggle") },
+                setGlobalCopyNormalizedEnabled: { _ in log.append("normalized-toggle") }
+            )
+        )
+
+        XCTAssertTrue(
+            coordinator.handleEditorAction(
+                rawAction: ValidationCoordinator.EditorAction.saveCurrentEditor.rawValue,
+                userInfo: [:]
+            )
+        )
+        XCTAssertEqual(log, ["save-standalone"])
+    }
+
+    func testValidationCoordinatorRoutesTextMutationToEditorCommand() {
+        var commands: [(EditorCommand, String?)] = []
+        let coordinator = ValidationCoordinator(
+            applicationCallbacks: .init(
+                openPanel: {},
+                togglePanelFromStatusItem: {},
+                captureSnapshot: { _ in },
+                captureWindowImage: { _, _ in },
+                openFile: { _ in },
+                openNewNote: {},
+                openSettings: {},
+                openHelp: {},
+                runGlobalCopyJoined: {},
+                runGlobalCopyJoinedWithSpaces: {},
+                runGlobalCopyNormalized: {},
+                inspectCodexIntegration: {},
+                resetValidationState: {},
+                syncClipboardCapture: {},
+                seedHistoryText: { _ in },
+                reassertForegroundIfNeeded: {}
+            ),
+            panelCallbacks: .init(
+                postPanelAction: { _, _ in },
+                readTextFile: { _ in "" }
+            ),
+            editorCallbacks: .init(
+                currentSurface: { .noteEditor },
+                readTextFile: { _ in "loaded-text" },
+                postEditorCommand: { command, text in commands.append((command, text)) },
+                saveNoteEditor: { true },
+                saveStandaloneNote: { true },
+                saveNoteEditorAs: { true },
+                saveStandaloneNoteAs: { true },
+                saveCurrentEditorToFile: { _ in true },
+                closeNoteEditor: {},
+                closeStandaloneNote: {},
+                respondToAttachedSheet: { _ in }
+            ),
+            previewCallbacks: .init(
+                setPreviewWidth: { _ in },
+                setPreviewScroll: { _ in },
+                syncPreviewScroll: {},
+                selectPreviewText: { _, _ in },
+                copyPreviewSelection: {},
+                measurePreviewHorizontalOverflow: {},
+                clickPreviewFirstLink: {},
+                respondToPreviewLinkPrompt: { _ in }
+            ),
+            settingsCallbacks: .init(
+                increaseZoom: {},
+                decreaseZoom: {},
+                resetZoom: {},
+                setSettingsLanguage: { _ in },
+                setThemePreset: { _ in },
+                setPanelShortcut: { _ in },
+                setToggleMarkdownPreviewShortcut: { _ in },
+                setGlobalCopyJoinedEnabled: { _ in },
+                setGlobalCopyJoinedWithSpacesEnabled: { _ in },
+                setGlobalCopyNormalizedEnabled: { _ in }
+            )
+        )
+
+        XCTAssertTrue(
+            coordinator.handleEditorAction(
+                rawAction: ValidationCoordinator.EditorAction.setCurrentEditorText.rawValue,
+                userInfo: ["path": "/tmp/test.txt"]
+            )
+        )
+        XCTAssertEqual(commands.count, 1)
+        XCTAssertEqual(commands.first?.0, .setText)
+        XCTAssertEqual(commands.first?.1, "loaded-text")
+    }
+
+    func testValidationCoordinatorRoutesPreviewActionsToCallbacks() {
+        var log: [String] = []
+        let coordinator = ValidationCoordinator(
+            applicationCallbacks: .init(
+                openPanel: {},
+                togglePanelFromStatusItem: {},
+                captureSnapshot: { _ in },
+                captureWindowImage: { _, _ in },
+                openFile: { _ in },
+                openNewNote: {},
+                openSettings: {},
+                openHelp: {},
+                runGlobalCopyJoined: {},
+                runGlobalCopyJoinedWithSpaces: {},
+                runGlobalCopyNormalized: {},
+                inspectCodexIntegration: {},
+                resetValidationState: {},
+                syncClipboardCapture: {},
+                seedHistoryText: { _ in },
+                reassertForegroundIfNeeded: {}
+            ),
+            panelCallbacks: .init(
+                postPanelAction: { _, _ in },
+                readTextFile: { _ in "" }
+            ),
+            editorCallbacks: .init(
+                currentSurface: { .none },
+                readTextFile: { _ in "" },
+                postEditorCommand: { _, _ in },
+                saveNoteEditor: { true },
+                saveStandaloneNote: { true },
+                saveNoteEditorAs: { true },
+                saveStandaloneNoteAs: { true },
+                saveCurrentEditorToFile: { _ in true },
+                closeNoteEditor: {},
+                closeStandaloneNote: {},
+                respondToAttachedSheet: { _ in }
+            ),
+            previewCallbacks: .init(
+                setPreviewWidth: { width in log.append("width:\(width)") },
+                setPreviewScroll: { progress in log.append("scroll:\(progress)") },
+                syncPreviewScroll: { log.append("sync") },
+                selectPreviewText: { needle, preferCodeBlock in
+                    log.append("select:\(needle):\(preferCodeBlock)")
+                },
+                copyPreviewSelection: { log.append("copy") },
+                measurePreviewHorizontalOverflow: { log.append("measure") },
+                clickPreviewFirstLink: { log.append("click") },
+                respondToPreviewLinkPrompt: { rawChoice in log.append("prompt:\(rawChoice)") }
+            ),
+            settingsCallbacks: .init(
+                increaseZoom: {},
+                decreaseZoom: {},
+                resetZoom: {},
+                setSettingsLanguage: { _ in },
+                setThemePreset: { _ in },
+                setPanelShortcut: { _ in },
+                setToggleMarkdownPreviewShortcut: { _ in },
+                setGlobalCopyJoinedEnabled: { _ in },
+                setGlobalCopyJoinedWithSpacesEnabled: { _ in },
+                setGlobalCopyNormalizedEnabled: { _ in }
+            )
+        )
+
+        XCTAssertTrue(
+            coordinator.handlePreviewAction(
+                rawAction: ValidationCoordinator.PreviewAction.selectCurrentPreviewCodeBlock.rawValue,
+                userInfo: ["path": "needle"]
+            )
+        )
+        XCTAssertTrue(
+            coordinator.handlePreviewAction(
+                rawAction: ValidationCoordinator.PreviewAction.setCurrentPreviewScroll.rawValue,
+                userInfo: ["path": "0.5"]
+            )
+        )
+        XCTAssertTrue(
+            coordinator.handlePreviewAction(
+                rawAction: ValidationCoordinator.PreviewAction.respondToPreviewLinkPrompt.rawValue,
+                userInfo: ["path": "open"]
+            )
+        )
+
+        XCTAssertEqual(log, ["select:needle:true", "scroll:0.5", "prompt:open"])
+    }
+
+    func testValidationCoordinatorRoutesSettingsActionsToCallbacks() {
+        var log: [String] = []
+        let coordinator = ValidationCoordinator(
+            applicationCallbacks: .init(
+                openPanel: {},
+                togglePanelFromStatusItem: {},
+                captureSnapshot: { _ in },
+                captureWindowImage: { _, _ in },
+                openFile: { _ in },
+                openNewNote: {},
+                openSettings: {},
+                openHelp: {},
+                runGlobalCopyJoined: {},
+                runGlobalCopyJoinedWithSpaces: {},
+                runGlobalCopyNormalized: {},
+                inspectCodexIntegration: {},
+                resetValidationState: {},
+                syncClipboardCapture: {},
+                seedHistoryText: { _ in },
+                reassertForegroundIfNeeded: {}
+            ),
+            panelCallbacks: .init(
+                postPanelAction: { _, _ in },
+                readTextFile: { _ in "" }
+            ),
+            editorCallbacks: .init(
+                currentSurface: { .none },
+                readTextFile: { _ in "" },
+                postEditorCommand: { _, _ in },
+                saveNoteEditor: { true },
+                saveStandaloneNote: { true },
+                saveNoteEditorAs: { true },
+                saveStandaloneNoteAs: { true },
+                saveCurrentEditorToFile: { _ in true },
+                closeNoteEditor: {},
+                closeStandaloneNote: {},
+                respondToAttachedSheet: { _ in }
+            ),
+            previewCallbacks: .init(
+                setPreviewWidth: { _ in },
+                setPreviewScroll: { _ in },
+                syncPreviewScroll: {},
+                selectPreviewText: { _, _ in },
+                copyPreviewSelection: {},
+                measurePreviewHorizontalOverflow: {},
+                clickPreviewFirstLink: {},
+                respondToPreviewLinkPrompt: { _ in }
+            ),
+            settingsCallbacks: .init(
+                increaseZoom: { log.append("zoom+") },
+                decreaseZoom: { log.append("zoom-") },
+                resetZoom: { log.append("zoom0") },
+                setSettingsLanguage: { language in log.append("lang:\(language.rawValue)") },
+                setThemePreset: { theme in log.append("theme:\(theme.rawValue)") },
+                setPanelShortcut: { rawValue in log.append("panel:\(rawValue)") },
+                setToggleMarkdownPreviewShortcut: { rawValue in log.append("preview:\(rawValue)") },
+                setGlobalCopyJoinedEnabled: { enabled in log.append("joined:\(enabled)") },
+                setGlobalCopyJoinedWithSpacesEnabled: { enabled in log.append("joined-spaces:\(enabled)") },
+                setGlobalCopyNormalizedEnabled: { enabled in log.append("normalized:\(enabled)") }
+            )
+        )
+
+        XCTAssertTrue(
+            coordinator.handleSettingsAction(
+                rawAction: ValidationCoordinator.SettingsAction.setSettingsLanguage.rawValue,
+                userInfo: ["path": SettingsLanguage.english.rawValue]
+            )
+        )
+        XCTAssertTrue(
+            coordinator.handleSettingsAction(
+                rawAction: ValidationCoordinator.SettingsAction.setThemePreset.rawValue,
+                userInfo: ["path": InterfaceThemePreset.graphite.rawValue]
+            )
+        )
+        XCTAssertTrue(
+            coordinator.handleSettingsAction(
+                rawAction: ValidationCoordinator.SettingsAction.setGlobalCopyJoinedEnabled.rawValue,
+                userInfo: ["path": "true"]
+            )
+        )
+        XCTAssertTrue(
+            coordinator.handleSettingsAction(
+                rawAction: ValidationCoordinator.SettingsAction.setGlobalCopyJoinedWithSpacesEnabled.rawValue,
+                userInfo: ["path": "false"]
+            )
+        )
+
+        XCTAssertEqual(log, ["lang:en", "theme:graphite", "joined:true", "joined-spaces:false"])
+    }
+
+    func testValidationCoordinatorRoutesPanelActionsToCallbacks() {
+        var log: [String] = []
+        let coordinator = ValidationCoordinator(
+            applicationCallbacks: .init(
+                openPanel: {},
+                togglePanelFromStatusItem: {},
+                captureSnapshot: { _ in },
+                captureWindowImage: { _, _ in },
+                openFile: { _ in },
+                openNewNote: {},
+                openSettings: {},
+                openHelp: {},
+                runGlobalCopyJoined: {},
+                runGlobalCopyJoinedWithSpaces: {},
+                runGlobalCopyNormalized: {},
+                inspectCodexIntegration: {},
+                resetValidationState: {},
+                syncClipboardCapture: {},
+                seedHistoryText: { _ in },
+                reassertForegroundIfNeeded: {}
+            ),
+            panelCallbacks: .init(
+                postPanelAction: { action, text in
+                    log.append("\(action):\(text ?? "")")
+                },
+                readTextFile: { _ in "loaded-panel-text" }
+            ),
+            editorCallbacks: .init(
+                currentSurface: { .none },
+                readTextFile: { _ in "" },
+                postEditorCommand: { _, _ in },
+                saveNoteEditor: { true },
+                saveStandaloneNote: { true },
+                saveNoteEditorAs: { true },
+                saveStandaloneNoteAs: { true },
+                saveCurrentEditorToFile: { _ in true },
+                closeNoteEditor: {},
+                closeStandaloneNote: {},
+                respondToAttachedSheet: { _ in }
+            ),
+            previewCallbacks: .init(
+                setPreviewWidth: { _ in },
+                setPreviewScroll: { _ in },
+                syncPreviewScroll: {},
+                selectPreviewText: { _, _ in },
+                copyPreviewSelection: {},
+                measurePreviewHorizontalOverflow: {},
+                clickPreviewFirstLink: {},
+                respondToPreviewLinkPrompt: { _ in }
+            ),
+            settingsCallbacks: .init(
+                increaseZoom: {},
+                decreaseZoom: {},
+                resetZoom: {},
+                setSettingsLanguage: { _ in },
+                setThemePreset: { _ in },
+                setPanelShortcut: { _ in },
+                setToggleMarkdownPreviewShortcut: { _ in },
+                setGlobalCopyJoinedEnabled: { _ in },
+                setGlobalCopyJoinedWithSpacesEnabled: { _ in },
+                setGlobalCopyNormalizedEnabled: { _ in }
+            )
+        )
+
+        XCTAssertTrue(
+            coordinator.handlePanelAction(
+                rawAction: ValidationCoordinator.PanelAction.setPanelEditorText.rawValue,
+                userInfo: ["path": "/tmp/panel.txt"]
+            )
+        )
+        XCTAssertTrue(
+            coordinator.handlePanelAction(
+                rawAction: ValidationCoordinator.PanelAction.commitPanelEditor.rawValue,
+                userInfo: [:]
+            )
+        )
+
+        XCTAssertEqual(log, ["setEditorText:loaded-panel-text", "commitEditor:"])
+    }
+
+    func testValidationCoordinatorRoutesApplicationOpenFileActionAndReassertsForeground() {
+        var log: [String] = []
+        let coordinator = ValidationCoordinator(
+            applicationCallbacks: .init(
+                openPanel: { log.append("open-panel") },
+                togglePanelFromStatusItem: { log.append("toggle-panel") },
+                captureSnapshot: { _ in log.append("snapshot") },
+                captureWindowImage: { _, _ in log.append("image") },
+                openFile: { url in log.append("open-file:\(url.path)") },
+                openNewNote: { log.append("open-note") },
+                openSettings: { log.append("open-settings") },
+                openHelp: { log.append("open-help") },
+                runGlobalCopyJoined: { log.append("copy-joined") },
+                runGlobalCopyJoinedWithSpaces: { log.append("copy-joined-spaces") },
+                runGlobalCopyNormalized: { log.append("copy-normalized") },
+                inspectCodexIntegration: { log.append("inspect") },
+                resetValidationState: { log.append("reset") },
+                syncClipboardCapture: { log.append("sync") },
+                seedHistoryText: { text in log.append("seed:\(text)") },
+                reassertForegroundIfNeeded: { log.append("reassert") }
+            ),
+            panelCallbacks: .init(
+                postPanelAction: { _, _ in },
+                readTextFile: { _ in "" }
+            ),
+            editorCallbacks: .init(
+                currentSurface: { .none },
+                readTextFile: { _ in "" },
+                postEditorCommand: { _, _ in },
+                saveNoteEditor: { true },
+                saveStandaloneNote: { true },
+                saveNoteEditorAs: { true },
+                saveStandaloneNoteAs: { true },
+                saveCurrentEditorToFile: { _ in true },
+                closeNoteEditor: {},
+                closeStandaloneNote: {},
+                respondToAttachedSheet: { _ in }
+            ),
+            previewCallbacks: .init(
+                setPreviewWidth: { _ in },
+                setPreviewScroll: { _ in },
+                syncPreviewScroll: {},
+                selectPreviewText: { _, _ in },
+                copyPreviewSelection: {},
+                measurePreviewHorizontalOverflow: {},
+                clickPreviewFirstLink: {},
+                respondToPreviewLinkPrompt: { _ in }
+            ),
+            settingsCallbacks: .init(
+                increaseZoom: {},
+                decreaseZoom: {},
+                resetZoom: {},
+                setSettingsLanguage: { _ in },
+                setThemePreset: { _ in },
+                setPanelShortcut: { _ in },
+                setToggleMarkdownPreviewShortcut: { _ in },
+                setGlobalCopyJoinedEnabled: { _ in },
+                setGlobalCopyJoinedWithSpacesEnabled: { _ in },
+                setGlobalCopyNormalizedEnabled: { _ in }
+            )
+        )
+
+        XCTAssertTrue(
+            coordinator.handleApplicationAction(
+                rawAction: ValidationCoordinator.ApplicationAction.openFile.rawValue,
+                userInfo: ["path": "/tmp/validation.md"]
+            )
+        )
+
+        XCTAssertEqual(log, ["open-file:/tmp/validation.md", "reassert"])
+    }
+
+    func testValidationCoordinatorRoutesApplicationSeedHistoryAction() {
+        var seededText: String?
+        let coordinator = ValidationCoordinator(
+            applicationCallbacks: .init(
+                openPanel: {},
+                togglePanelFromStatusItem: {},
+                captureSnapshot: { _ in },
+                captureWindowImage: { _, _ in },
+                openFile: { _ in },
+                openNewNote: {},
+                openSettings: {},
+                openHelp: {},
+                runGlobalCopyJoined: {},
+                runGlobalCopyJoinedWithSpaces: {},
+                runGlobalCopyNormalized: {},
+                inspectCodexIntegration: {},
+                resetValidationState: {},
+                syncClipboardCapture: {},
+                seedHistoryText: { text in seededText = text },
+                reassertForegroundIfNeeded: {}
+            ),
+            panelCallbacks: .init(
+                postPanelAction: { _, _ in },
+                readTextFile: { _ in "" }
+            ),
+            editorCallbacks: .init(
+                currentSurface: { .none },
+                readTextFile: { _ in "" },
+                postEditorCommand: { _, _ in },
+                saveNoteEditor: { true },
+                saveStandaloneNote: { true },
+                saveNoteEditorAs: { true },
+                saveStandaloneNoteAs: { true },
+                saveCurrentEditorToFile: { _ in true },
+                closeNoteEditor: {},
+                closeStandaloneNote: {},
+                respondToAttachedSheet: { _ in }
+            ),
+            previewCallbacks: .init(
+                setPreviewWidth: { _ in },
+                setPreviewScroll: { _ in },
+                syncPreviewScroll: {},
+                selectPreviewText: { _, _ in },
+                copyPreviewSelection: {},
+                measurePreviewHorizontalOverflow: {},
+                clickPreviewFirstLink: {},
+                respondToPreviewLinkPrompt: { _ in }
+            ),
+            settingsCallbacks: .init(
+                increaseZoom: {},
+                decreaseZoom: {},
+                resetZoom: {},
+                setSettingsLanguage: { _ in },
+                setThemePreset: { _ in },
+                setPanelShortcut: { _ in },
+                setToggleMarkdownPreviewShortcut: { _ in },
+                setGlobalCopyJoinedEnabled: { _ in },
+                setGlobalCopyJoinedWithSpacesEnabled: { _ in },
+                setGlobalCopyNormalizedEnabled: { _ in }
+            )
+        )
+
+        XCTAssertTrue(
+            coordinator.handleApplicationAction(
+                rawAction: ValidationCoordinator.ApplicationAction.seedHistoryText.rawValue,
+                userInfo: ["path": "seed-text"]
+            )
+        )
+
+        XCTAssertEqual(seededText, "seed-text")
     }
 
     func testStandaloneDiscardActionDeletesPlaceholderDrafts() {

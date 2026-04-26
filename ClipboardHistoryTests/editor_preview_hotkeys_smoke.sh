@@ -187,10 +187,26 @@ tell application "System Events" to key code $key_code using {$modifiers}
 APPLESCRIPT
 }
 
+launch_gui_app() {
+  local app_name="$1"
+  open -a "$app_name" >/dev/null 2>&1
+  for _ in {1..50}; do
+    if osascript -e "tell application \"$app_name\" to count documents" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "$app_name did not become scriptable" >&2
+  return 1
+}
+
 prepare_textedit_document() {
   local base_text="$1"
+  launch_gui_app "TextEdit"
   osascript \
+    -e 'tell application "TextEdit" to reopen' \
     -e 'tell application "TextEdit" to activate' \
+    -e 'delay 0.2' \
     -e 'tell application "TextEdit" to if (count of documents) > 0 then close every document saving no' \
     -e "tell application \"TextEdit\" to make new document with properties {text:\"$base_text\"}" \
     -e 'tell application "System Events" to key code 124 using {command down}' \

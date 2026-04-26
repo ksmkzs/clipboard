@@ -47,7 +47,9 @@ struct HistoryRowView: View {
     let moveLineDownShortcut: HotKeyManager.Shortcut
     let toggleMarkdownPreviewShortcut: HotKeyManager.Shortcut
     let joinLinesShortcut: HotKeyManager.Shortcut
+    let joinLinesWithSpacesShortcut: HotKeyManager.Shortcut
     let normalizeForCommandShortcut: HotKeyManager.Shortcut
+    let joinLineBreakStrategy: JoinLineBreakStrategy
     @Binding var editorText: String
     let isMarkdownPreviewVisible: Bool
     let onRenamePin: (String) -> Void
@@ -378,8 +380,10 @@ struct HistoryRowView: View {
             moveLineDownShortcut: moveLineDownShortcut,
             toggleMarkdownPreviewShortcut: toggleMarkdownPreviewShortcut,
             joinLinesShortcut: joinLinesShortcut,
+            joinLinesWithSpacesShortcut: joinLinesWithSpacesShortcut,
             normalizeForCommandShortcut: normalizeForCommandShortcut,
             orphanCodexDiscardShortcut: AppSettings.defaultOrphanCodexDiscardShortcut,
+            joinLineBreakStrategy: joinLineBreakStrategy,
             onEscape: onCancelEditor,
             onCommit: onCommitEditor,
             onSave: {},
@@ -568,6 +572,8 @@ extension HistoryRowView: Equatable {
         lhs.isEditingText == rhs.isEditingText &&
         lhs.isMarkdownPreviewVisible == rhs.isMarkdownPreviewVisible &&
         lhs.pinnedDropIndicatorPosition == rhs.pinnedDropIndicatorPosition &&
+        lhs.joinLineBreakStrategy == rhs.joinLineBreakStrategy &&
+        lhs.joinLinesWithSpacesShortcut == rhs.joinLinesWithSpacesShortcut &&
         lhs.editorText == rhs.editorText
     }
 }

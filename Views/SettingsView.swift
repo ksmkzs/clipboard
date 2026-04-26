@@ -14,6 +14,7 @@ struct SettingsView: View {
         case translation
         case globalNewNote
         case globalCopyJoined
+        case globalCopyJoinedWithSpaces
         case globalCopyNormalized
         case newNote
         case togglePin
@@ -28,9 +29,11 @@ struct SettingsView: View {
         case moveLineUp
         case moveLineDown
         case copyJoined
+        case copyJoinedWithSpaces
         case copyNormalized
         case toggleMarkdownPreview
         case joinLines
+        case joinLinesWithSpaces
         case normalizeForCommand
         case orphanCodexDiscard
 
@@ -114,9 +117,14 @@ struct SettingsView: View {
             syncDraftFromSettings()
             refreshCodexIntegrationStatus()
             installShortcutCaptureMonitor()
+            appDelegate.setSettingsShortcutCaptureActive(false)
+        }
+        .onChange(of: captureTarget) { _, newValue in
+            appDelegate.setSettingsShortcutCaptureActive(newValue != nil)
         }
         .onDisappear {
             removeShortcutCaptureMonitor()
+            appDelegate.setSettingsShortcutCaptureActive(false)
         }
         .alert(
             t("Could not apply settings", "設定を適用できませんでした"),
@@ -171,6 +179,22 @@ struct SettingsView: View {
                     Text(t("Reset", "初期化")).tag(NewNoteReopenBehavior.reset)
                     Text(t("Restore last draft", "前回の下書きを復元")).tag(NewNoteReopenBehavior.restoreLastDraft)
                 }
+                Picker(
+                    t("Join command line-break handling", "一文化コマンドの改行処理"),
+                    selection: $draftSettings.joinLineBreakStrategy
+                ) {
+                    Text(t("Remove breaks", "改行を削除")).tag(JoinLineBreakStrategy.removeBreaks)
+                    Text(t("Replace with space", "半角スペースに置換")).tag(JoinLineBreakStrategy.replaceWithSpace)
+                }
+                Text(
+                    t(
+                        "Applies to One Line / Join commands in the standard window, editor window, and global clipboard join.",
+                        "標準ウィンドウ / 編集ウィンドウ / グローバルの一文化コマンドにまとめて適用されます。"
+                    )
+                )
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
                 Stepper(value: $draftSettings.historyLimit, in: 25...500, step: 25) {
                     HStack {
                         Text(t("Clipboard history limit", "クリップボード履歴保持数"))
@@ -392,6 +416,10 @@ struct SettingsView: View {
                         isOn: $draftSettings.globalCopyJoinedEnabled
                     )
                     Toggle(
+                        t("Enable global clipboard space join", "グローバルの空白区切り一文化を有効化"),
+                        isOn: $draftSettings.globalCopyJoinedWithSpacesEnabled
+                    )
+                    Toggle(
                         t("Enable global clipboard normalize", "グローバルのクリップボード整形を有効化"),
                         isOn: $draftSettings.globalCopyNormalizedEnabled
                     )
@@ -399,6 +427,11 @@ struct SettingsView: View {
                         title: t("Replace clipboard with one-line text", "クリップボード内容を一文化して上書き"),
                         target: .globalCopyJoined,
                         shortcut: optionalBinding(for: .globalCopyJoined)
+                    )
+                    optionalShortcutRow(
+                        title: t("Replace clipboard with space-joined text", "クリップボード内容を空白区切りで一文化して上書き"),
+                        target: .globalCopyJoinedWithSpaces,
+                        shortcut: optionalBinding(for: .globalCopyJoinedWithSpaces)
                     )
                     optionalShortcutRow(
                         title: t("Replace clipboard with normalized text", "クリップボード内容を整形して上書き"),
@@ -449,6 +482,11 @@ struct SettingsView: View {
                         shortcut: binding(for: .copyJoined)
                     )
                     shortcutRow(
+                        title: t("Join item with spaces", "選択中の項目を空白区切りで一文化"),
+                        target: .copyJoinedWithSpaces,
+                        shortcut: binding(for: .copyJoinedWithSpaces)
+                    )
+                    shortcutRow(
                         title: t("Normalize item whitespace", "選択中の項目の空白を整形"),
                         target: .copyNormalized,
                         shortcut: binding(for: .copyNormalized)
@@ -490,6 +528,11 @@ struct SettingsView: View {
                         title: t("Join into one sentence", "選択中の項目を一文に整形"),
                         target: .joinLines,
                         shortcut: binding(for: .joinLines)
+                    )
+                    shortcutRow(
+                        title: t("Join with spaces", "空白区切りで一文化"),
+                        target: .joinLinesWithSpaces,
+                        shortcut: binding(for: .joinLinesWithSpaces)
                     )
                     shortcutRow(
                         title: t("Normalize whitespace", "選択中の項目の空白を整形"),
@@ -840,6 +883,8 @@ struct SettingsView: View {
             return t("Create new note from anywhere", "どこからでも新規ノートを作成")
         case .globalCopyJoined:
             return t("Replace clipboard with one-line text", "クリップボード内容を一文化して上書き")
+        case .globalCopyJoinedWithSpaces:
+            return t("Replace clipboard with space-joined text", "クリップボード内容を空白区切りで一文化して上書き")
         case .globalCopyNormalized:
             return t("Replace clipboard with normalized text", "クリップボード内容を整形して上書き")
         case .newNote:
@@ -868,12 +913,16 @@ struct SettingsView: View {
             return t("Move line", "行単位で移動")
         case .copyJoined:
             return t("Transform item into one sentence", "選択中の項目を一文に整形")
+        case .copyJoinedWithSpaces:
+            return t("Join item with spaces", "選択中の項目を空白区切りで一文化")
         case .copyNormalized:
             return t("Normalize item whitespace", "選択中の項目の空白を整形")
         case .toggleMarkdownPreview:
             return t("Markdown preview", "Markdown プレビュー")
         case .joinLines:
             return t("Join into one sentence", "選択中の項目を一文に整形")
+        case .joinLinesWithSpaces:
+            return t("Join with spaces", "空白区切りで一文化")
         case .normalizeForCommand:
             return t("Normalize whitespace", "選択中の項目の空白を整形")
         case .orphanCodexDiscard:
@@ -901,8 +950,13 @@ struct SettingsView: View {
             )
         case .globalCopyJoined:
             return items(
-                en: ["Scope: global", "Action: replace the current clipboard text with a one-line variant", "Source: current clipboard text", "Default: \(HotKeyManager.displayString(for: AppSettings.defaultGlobalCopyJoinedShortcut))", "Default state: on"],
-                ja: ["対象: グローバル", "動作: 現在のクリップボード内容を、一文化して上書きする", "入力: 現在のクリップボード内容", "初期値: \(HotKeyManager.displayString(for: AppSettings.defaultGlobalCopyJoinedShortcut))", "初期状態: オン"]
+                en: ["Scope: global", "Action: replace the current clipboard text with a one-line variant using the configured join behavior", "Source: current clipboard text", "Default: \(HotKeyManager.displayString(for: AppSettings.defaultGlobalCopyJoinedShortcut))", "Default state: on"],
+                ja: ["対象: グローバル", "動作: 現在のクリップボード内容を、設定済みの一文化ルールで上書きする", "入力: 現在のクリップボード内容", "初期値: \(HotKeyManager.displayString(for: AppSettings.defaultGlobalCopyJoinedShortcut))", "初期状態: オン"]
+            )
+        case .globalCopyJoinedWithSpaces:
+            return items(
+                en: ["Scope: global", "Action: replace the current clipboard text with a one-line variant that uses spaces between lines", "Source: current clipboard text", "Default: \(HotKeyManager.displayString(for: AppSettings.defaultGlobalCopyJoinedWithSpacesShortcut))", "Default state: on"],
+                ja: ["対象: グローバル", "動作: 現在のクリップボード内容を、改行を半角スペースにして一文化する", "入力: 現在のクリップボード内容", "初期値: \(HotKeyManager.displayString(for: AppSettings.defaultGlobalCopyJoinedWithSpacesShortcut))", "初期状態: オン"]
             )
         case .globalCopyNormalized:
             return items(
@@ -971,8 +1025,13 @@ struct SettingsView: View {
             )
         case .copyJoined:
             return items(
-                en: ["Scope: standard window", "Action: transform the focused item into a single-line version in place"],
-                ja: ["対象: 標準ウィンドウ", "動作: フォーカス中の項目をその場で一文化する"]
+                en: ["Scope: standard window", "Action: transform the focused item into a one-line version using the configured join behavior"],
+                ja: ["対象: 標準ウィンドウ", "動作: フォーカス中の項目を設定済みの一文化ルールで変換する"]
+            )
+        case .copyJoinedWithSpaces:
+            return items(
+                en: ["Scope: standard window", "Action: transform the focused item into one line with spaces between original lines"],
+                ja: ["対象: 標準ウィンドウ", "動作: フォーカス中の項目を改行ごとに半角スペースでつなぐ"]
             )
         case .copyNormalized:
             return items(
@@ -986,13 +1045,18 @@ struct SettingsView: View {
             )
         case .joinLines:
             return items(
-                en: ["Scope: editor window", "Action: remove line breaks after trimming each line edge"],
-                ja: ["対象: 編集ウィンドウ", "動作: 各行の端を削ってから改行を消す"]
+                en: ["Scope: editor window", "Action: trim each line edge and join using the configured line-break handling"],
+                ja: ["対象: 編集ウィンドウ", "動作: 各行の端を削ってから、設定済みのルールでつなぐ"]
+            )
+        case .joinLinesWithSpaces:
+            return items(
+                en: ["Scope: editor window", "Action: trim each line edge and join with spaces between original lines"],
+                ja: ["対象: 編集ウィンドウ", "動作: 各行の端を削ってから、改行を半角スペースにしてつなぐ"]
             )
         case .normalizeForCommand:
             return items(
-                en: ["Scope: editor window", "Action: keep line breaks and trim each line edge"],
-                ja: ["対象: 編集ウィンドウ", "動作: 改行は維持しつつ各行の端を削る"]
+                en: ["Scope: editor window", "Action: keep line breaks and remove the first non-empty line's indentation depth from each line"],
+                ja: ["対象: 編集ウィンドウ", "動作: 改行は維持しつつ、最初の非空行で削った分だけ各行の先頭空白を削る"]
             )
         case .orphanCodexDiscard:
             return items(
@@ -1014,7 +1078,7 @@ struct SettingsView: View {
                     return draftSettings.panelShortcut
                 case .translation:
                     return draftSettings.translationShortcut
-                case .globalNewNote, .globalCopyJoined, .globalCopyNormalized:
+                case .globalNewNote, .globalCopyJoined, .globalCopyJoinedWithSpaces, .globalCopyNormalized:
                     return AppSettings.default.panelShortcut
                 case .newNote:
                     return draftSettings.newNoteShortcut
@@ -1042,12 +1106,16 @@ struct SettingsView: View {
                     return draftSettings.moveLineDownShortcut
                 case .copyJoined:
                     return draftSettings.copyJoinedShortcut
+                case .copyJoinedWithSpaces:
+                    return draftSettings.copyJoinedWithSpacesShortcut
                 case .copyNormalized:
                     return draftSettings.copyNormalizedShortcut
                 case .toggleMarkdownPreview:
                     return draftSettings.toggleMarkdownPreviewShortcut
                 case .joinLines:
                     return draftSettings.joinLinesShortcut
+                case .joinLinesWithSpaces:
+                    return draftSettings.joinLinesWithSpacesShortcut
                 case .normalizeForCommand:
                     return draftSettings.normalizeForCommandShortcut
                 case .orphanCodexDiscard:
@@ -1060,7 +1128,7 @@ struct SettingsView: View {
                     draftSettings.panelShortcut = newValue
                 case .translation:
                     draftSettings.translationShortcut = newValue
-                case .globalNewNote, .globalCopyJoined, .globalCopyNormalized:
+                case .globalNewNote, .globalCopyJoined, .globalCopyJoinedWithSpaces, .globalCopyNormalized:
                     break
                 case .newNote:
                     draftSettings.newNoteShortcut = newValue
@@ -1088,12 +1156,16 @@ struct SettingsView: View {
                     draftSettings.moveLineDownShortcut = newValue
                 case .copyJoined:
                     draftSettings.copyJoinedShortcut = newValue
+                case .copyJoinedWithSpaces:
+                    draftSettings.copyJoinedWithSpacesShortcut = newValue
                 case .copyNormalized:
                     draftSettings.copyNormalizedShortcut = newValue
                 case .toggleMarkdownPreview:
                     draftSettings.toggleMarkdownPreviewShortcut = newValue
                 case .joinLines:
                     draftSettings.joinLinesShortcut = newValue
+                case .joinLinesWithSpaces:
+                    draftSettings.joinLinesWithSpacesShortcut = newValue
                 case .normalizeForCommand:
                     draftSettings.normalizeForCommandShortcut = newValue
                 case .orphanCodexDiscard:
@@ -1111,6 +1183,8 @@ struct SettingsView: View {
                     return draftSettings.globalNewNoteShortcut
                 case .globalCopyJoined:
                     return draftSettings.globalCopyJoinedShortcut
+                case .globalCopyJoinedWithSpaces:
+                    return draftSettings.globalCopyJoinedWithSpacesShortcut
                 case .globalCopyNormalized:
                     return draftSettings.globalCopyNormalizedShortcut
                 default:
@@ -1123,6 +1197,8 @@ struct SettingsView: View {
                     draftSettings.globalNewNoteShortcut = newValue
                 case .globalCopyJoined:
                     draftSettings.globalCopyJoinedShortcut = newValue
+                case .globalCopyJoinedWithSpaces:
+                    draftSettings.globalCopyJoinedWithSpacesShortcut = newValue
                 case .globalCopyNormalized:
                     draftSettings.globalCopyNormalizedShortcut = newValue
                 default:
@@ -1270,6 +1346,7 @@ struct SettingsView: View {
                 ] + [
                     (t("New note from anywhere", "どこからでも新規作成"), draft.globalNewNoteShortcut),
                     (t("Replace clipboard with one-line text", "クリップボード内容を一文化して上書き"), draft.globalCopyJoinedEnabled ? draft.globalCopyJoinedShortcut : nil),
+                    (t("Replace clipboard with space-joined text", "クリップボード内容を空白区切りで一文化して上書き"), draft.globalCopyJoinedWithSpacesEnabled ? draft.globalCopyJoinedWithSpacesShortcut : nil),
                     (t("Replace clipboard with normalized text", "クリップボード内容を整形して上書き"), draft.globalCopyNormalizedEnabled ? draft.globalCopyNormalizedShortcut : nil)
                 ].compactMap { title, shortcut in
                     shortcut.map { (title, $0) }
@@ -1286,6 +1363,7 @@ struct SettingsView: View {
                     (t("Undo", "元に戻す"), draft.undoShortcut),
                     (t("Redo", "やり直し"), draft.redoShortcut),
                     (t("Transform item into one sentence", "選択中の項目を一文に整形"), draft.copyJoinedShortcut),
+                    (t("Join item with spaces", "選択中の項目を空白区切りで一文化"), draft.copyJoinedWithSpacesShortcut),
                     (t("Normalize item whitespace", "選択中の項目の空白を整形"), draft.copyNormalizedShortcut)
                 ]
             ),
@@ -1299,6 +1377,7 @@ struct SettingsView: View {
                     (t("Move line down", "行を下へ移動"), draft.moveLineDownShortcut),
                     (t("Markdown preview", "Markdown プレビュー"), draft.toggleMarkdownPreviewShortcut),
                     (t("Join into one sentence", "選択中の項目を一文に整形"), draft.joinLinesShortcut),
+                    (t("Join with spaces", "空白区切りで一文化"), draft.joinLinesWithSpacesShortcut),
                     (t("Normalize whitespace", "選択中の項目の空白を整形"), draft.normalizeForCommandShortcut)
                 ]
             ),
@@ -1477,7 +1556,7 @@ struct SettingsView: View {
 
     private func isOptionalTarget(_ target: ShortcutTarget) -> Bool {
         switch target {
-        case .globalNewNote, .globalCopyJoined, .globalCopyNormalized:
+        case .globalNewNote, .globalCopyJoined, .globalCopyJoinedWithSpaces, .globalCopyNormalized:
             return true
         default:
             return false
@@ -1490,12 +1569,14 @@ struct SettingsView: View {
             return AppSettings.default.panelShortcut
         case .translation:
             return AppSettings.default.translationShortcut
-        case .globalNewNote, .globalCopyJoined, .globalCopyNormalized:
+        case .globalNewNote, .globalCopyJoined, .globalCopyJoinedWithSpaces, .globalCopyNormalized:
             switch target {
             case .globalNewNote:
                 return AppSettings.defaultGlobalNewNoteShortcut
             case .globalCopyJoined:
                 return AppSettings.defaultGlobalCopyJoinedShortcut
+            case .globalCopyJoinedWithSpaces:
+                return AppSettings.defaultGlobalCopyJoinedWithSpacesShortcut
             case .globalCopyNormalized:
                 return AppSettings.defaultGlobalCopyNormalizedShortcut
             default:
@@ -1527,12 +1608,16 @@ struct SettingsView: View {
             return AppSettings.default.moveLineDownShortcut
         case .copyJoined:
             return AppSettings.default.copyJoinedShortcut
+        case .copyJoinedWithSpaces:
+            return AppSettings.default.copyJoinedWithSpacesShortcut
         case .copyNormalized:
             return AppSettings.default.copyNormalizedShortcut
         case .toggleMarkdownPreview:
             return AppSettings.default.toggleMarkdownPreviewShortcut
         case .joinLines:
             return AppSettings.default.joinLinesShortcut
+        case .joinLinesWithSpaces:
+            return AppSettings.default.joinLinesWithSpacesShortcut
         case .normalizeForCommand:
             return AppSettings.default.normalizeForCommandShortcut
         case .orphanCodexDiscard:

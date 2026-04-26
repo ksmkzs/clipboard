@@ -118,6 +118,15 @@ final class EditorNSTextViewKeyboardTests: XCTestCase {
         XCTAssertEqual(editor.selectedRange(), NSRange(location: 0, length: 11))
     }
 
+    func testOptionShiftCJoinsLinesByReplacingBreaksWithSpaces() {
+        let editor = makeEditor(text: "one\n two\nthree", selection: NSRange(location: 0, length: 14))
+
+        editor.keyDown(with: keyEvent(matching: AppSettings.default.joinLinesWithSpacesShortcut))
+
+        XCTAssertEqual(editor.string, "one two three")
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 0, length: 13))
+    }
+
     func testMarkdownPreviewRendererRendersHeadingAndEmphasisAsBlockHTML() {
         let html = MarkdownPreviewRenderer.documentHTML(for: "# a\n*a*")
 
@@ -811,6 +820,7 @@ final class EditorNSTextViewKeyboardTests: XCTestCase {
         XCTAssertEqual(editor.string, "alpha\nbeta\ngamma")
 
         editor.setSelectedRange(NSRange(location: 0, length: 10))
+        pasteboard.clearContents()
         editor.cut(nil)
         XCTAssertEqual(editor.string, "\ngamma")
         XCTAssertEqual(pasteboard.string(forType: .string), "alpha\nbeta")
@@ -1022,9 +1032,24 @@ final class EditorNSTextViewKeyboardTests: XCTestCase {
         XCTAssertEqual(result, "brew install\ngit\nprintf done")
     }
 
+    func testNormalizeCommandTextDedentsByFirstNonEmptyLineOnly() {
+        let result = normalizeCommandText("    def f():  \n        return 1\n    print(f())")
+        XCTAssertEqual(result, "def f():\n    return 1\nprint(f())")
+    }
+
+    func testNormalizeCommandTextKeepsLeadingBlankLinesAndRelativeIndent() {
+        let result = normalizeCommandText("\n\n  if ok:\n    print(ok)\n")
+        XCTAssertEqual(result, "\n\nif ok:\n  print(ok)\n")
+    }
+
     func testJoinLinesTextTrimsEachLineAndRemovesBreaks() {
         let result = joinLinesText("  a b   c  \n d")
         XCTAssertEqual(result, "a b   cd")
+    }
+
+    func testJoinLinesTextCanReplaceBreaksWithSingleSpaces() {
+        let result = joinLinesText("  a b   c  \n d", strategy: .replaceWithSpace)
+        XCTAssertEqual(result, "a b   c d")
     }
 
     private func makeEditor(text: String, selection: NSRange) -> EditorNSTextView {

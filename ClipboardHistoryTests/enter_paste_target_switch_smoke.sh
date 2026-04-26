@@ -124,10 +124,26 @@ seed_history_text() {
   wait_for_snapshot_condition "seed-history" "data['historyCount'] >= 1 and data['latestHistoryItemText'] == '$text' and data['clipboardText'] == '$text'" 60
 }
 
+launch_gui_app() {
+  local app_name="$1"
+  open -a "$app_name" >/dev/null 2>&1
+  for _ in {1..50}; do
+    if osascript -e "tell application \"$app_name\" to count documents" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "$app_name did not become scriptable" >&2
+  return 1
+}
+
 prepare_textedit_document() {
   local base_text="$1"
+  launch_gui_app "TextEdit"
   osascript \
+    -e 'tell application "TextEdit" to reopen' \
     -e 'tell application "TextEdit" to activate' \
+    -e 'delay 0.2' \
     -e 'tell application "TextEdit" to close every document saving no' \
     -e "tell application \"TextEdit\" to make new document with properties {text:\"$base_text\"}" \
     -e 'tell application "TextEdit" to activate' \
@@ -137,9 +153,12 @@ prepare_textedit_document() {
 
 prepare_script_editor_document() {
   local base_text="$1"
+  launch_gui_app "Script Editor"
   osascript \
+    -e 'tell application "Script Editor" to reopen' \
     -e 'tell application "Script Editor" to activate' \
-    -e 'tell application "Script Editor" to close every document saving no' \
+    -e 'delay 0.2' \
+    -e 'tell application "Script Editor" to if (count of documents) > 0 then close every document saving no' \
     -e 'tell application "Script Editor" to make new document' \
     -e "tell application \"Script Editor\" to set text of document 1 to \"$base_text\"" \
     -e 'tell application "Script Editor" to activate' \

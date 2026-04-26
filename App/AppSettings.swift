@@ -16,6 +16,22 @@ enum NewNoteReopenBehavior: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum JoinLineBreakStrategy: String, Codable, CaseIterable, Identifiable {
+    case removeBreaks
+    case replaceWithSpace
+
+    var id: String { rawValue }
+
+    var separator: String {
+        switch self {
+        case .removeBreaks:
+            return ""
+        case .replaceWithSpace:
+            return " "
+        }
+    }
+}
+
 enum FileLocalHistoryDeletedSourceBehavior: String, Codable, CaseIterable, Identifiable {
     case keepAsOrphan
     case deleteImmediately
@@ -73,6 +89,10 @@ struct AppSettings: Equatable {
         keyCode: UInt32(kVK_ANSI_C),
         modifiers: UInt32(shiftKey | cmdKey)
     )
+    static let defaultGlobalCopyJoinedWithSpacesShortcut = HotKeyManager.Shortcut(
+        keyCode: UInt32(kVK_ANSI_C),
+        modifiers: UInt32(optionKey | shiftKey)
+    )
     static let defaultOrphanCodexDiscardShortcut = HotKeyManager.Shortcut(
         keyCode: UInt32(kVK_ANSI_D),
         modifiers: UInt32(shiftKey | cmdKey)
@@ -115,8 +135,10 @@ struct AppSettings: Equatable {
     var globalNewNoteShortcut: HotKeyManager.Shortcut?
     var globalCopyJoinedShortcut: HotKeyManager.Shortcut?
     var globalCopyNormalizedShortcut: HotKeyManager.Shortcut?
+    var globalCopyJoinedWithSpacesShortcut: HotKeyManager.Shortcut?
     var globalCopyJoinedEnabled: Bool
     var globalCopyNormalizedEnabled: Bool
+    var globalCopyJoinedWithSpacesEnabled: Bool
     var togglePinShortcut: HotKeyManager.Shortcut
     var togglePinnedAreaShortcut: HotKeyManager.Shortcut
     var newNoteShortcut: HotKeyManager.Shortcut
@@ -131,10 +153,13 @@ struct AppSettings: Equatable {
     var moveLineDownShortcut: HotKeyManager.Shortcut
     var copyJoinedShortcut: HotKeyManager.Shortcut
     var copyNormalizedShortcut: HotKeyManager.Shortcut
+    var copyJoinedWithSpacesShortcut: HotKeyManager.Shortcut
     var toggleMarkdownPreviewShortcut: HotKeyManager.Shortcut
     var joinLinesShortcut: HotKeyManager.Shortcut
+    var joinLinesWithSpacesShortcut: HotKeyManager.Shortcut
     var normalizeForCommandShortcut: HotKeyManager.Shortcut
     var orphanCodexDiscardShortcut: HotKeyManager.Shortcut
+    var joinLineBreakStrategy: JoinLineBreakStrategy
     var launchAtLogin: Bool
     var translationTargetLanguage: String
     var historyLimit: Int
@@ -158,8 +183,10 @@ struct AppSettings: Equatable {
         globalNewNoteShortcut: defaultGlobalNewNoteShortcut,
         globalCopyJoinedShortcut: defaultGlobalCopyJoinedShortcut,
         globalCopyNormalizedShortcut: defaultGlobalCopyNormalizedShortcut,
+        globalCopyJoinedWithSpacesShortcut: defaultGlobalCopyJoinedWithSpacesShortcut,
         globalCopyJoinedEnabled: true,
         globalCopyNormalizedEnabled: true,
+        globalCopyJoinedWithSpacesEnabled: true,
         togglePinShortcut: HotKeyManager.Shortcut(
             keyCode: UInt32(kVK_ANSI_P),
             modifiers: 0
@@ -216,6 +243,10 @@ struct AppSettings: Equatable {
             keyCode: UInt32(kVK_ANSI_C),
             modifiers: UInt32(cmdKey | shiftKey)
         ),
+        copyJoinedWithSpacesShortcut: HotKeyManager.Shortcut(
+            keyCode: UInt32(kVK_ANSI_C),
+            modifiers: UInt32(optionKey | shiftKey)
+        ),
         toggleMarkdownPreviewShortcut: HotKeyManager.Shortcut(
             keyCode: UInt32(kVK_ANSI_P),
             modifiers: UInt32(cmdKey | optionKey)
@@ -224,11 +255,16 @@ struct AppSettings: Equatable {
             keyCode: UInt32(kVK_ANSI_C),
             modifiers: UInt32(cmdKey | optionKey)
         ),
+        joinLinesWithSpacesShortcut: HotKeyManager.Shortcut(
+            keyCode: UInt32(kVK_ANSI_C),
+            modifiers: UInt32(optionKey | shiftKey)
+        ),
         normalizeForCommandShortcut: HotKeyManager.Shortcut(
             keyCode: UInt32(kVK_ANSI_C),
             modifiers: UInt32(cmdKey | shiftKey)
         ),
         orphanCodexDiscardShortcut: defaultOrphanCodexDiscardShortcut,
+        joinLineBreakStrategy: .removeBreaks,
         launchAtLogin: false,
         translationTargetLanguage: "ja",
         historyLimit: 150,
@@ -489,8 +525,10 @@ final class UserDefaultsAppSettingsStore: AppSettingsStore {
         static let globalNewNoteShortcut = "hotkey.global.newNote"
         static let globalCopyJoinedShortcut = "hotkey.global.copyJoined"
         static let globalCopyNormalizedShortcut = "hotkey.global.copyNormalized"
+        static let globalCopyJoinedWithSpacesShortcut = "hotkey.global.copyJoinedWithSpaces"
         static let globalCopyJoinedEnabled = "hotkey.global.copyJoined.enabled"
         static let globalCopyNormalizedEnabled = "hotkey.global.copyNormalized.enabled"
+        static let globalCopyJoinedWithSpacesEnabled = "hotkey.global.copyJoinedWithSpaces.enabled"
         static let togglePinShortcut = "hotkey.local.togglePin"
         static let togglePinnedAreaShortcut = "hotkey.local.togglePinnedArea"
         static let newNoteShortcut = "hotkey.local.newNote"
@@ -505,10 +543,13 @@ final class UserDefaultsAppSettingsStore: AppSettingsStore {
         static let moveLineDownShortcut = "hotkey.editor.moveLineDown"
         static let copyJoinedShortcut = "hotkey.local.copyJoined"
         static let copyNormalizedShortcut = "hotkey.local.copyNormalized"
+        static let copyJoinedWithSpacesShortcut = "hotkey.local.copyJoinedWithSpaces"
         static let toggleMarkdownPreviewShortcut = "hotkey.editor.toggleMarkdownPreview"
         static let joinLinesShortcut = "hotkey.editor.joinLines"
+        static let joinLinesWithSpacesShortcut = "hotkey.editor.joinLinesWithSpaces"
         static let normalizeForCommandShortcut = "hotkey.editor.normalizeForCommand"
         static let orphanCodexDiscardShortcut = "hotkey.codex.orphanDiscard"
+        static let joinLineBreakStrategy = "editor.joinLineBreakStrategy"
         static let launchAtLogin = "app.launchAtLogin"
         static let translationTargetLanguage = "translation.targetLanguage"
         static let historyLimit = "history.limit"
@@ -528,7 +569,7 @@ final class UserDefaultsAppSettingsStore: AppSettingsStore {
     }
 
     private let userDefaults: UserDefaults
-    private static let currentMigrationVersion = 10
+    private static let currentMigrationVersion = 11
 
     init(userDefaults: UserDefaults = .standard) {
         self.userDefaults = userDefaults
@@ -546,11 +587,15 @@ final class UserDefaultsAppSettingsStore: AppSettingsStore {
         settings.globalNewNoteShortcut = loadShortcut(forKey: Key.globalNewNoteShortcut)
         settings.globalCopyJoinedShortcut = loadShortcut(forKey: Key.globalCopyJoinedShortcut)
         settings.globalCopyNormalizedShortcut = loadShortcut(forKey: Key.globalCopyNormalizedShortcut)
+        settings.globalCopyJoinedWithSpacesShortcut = loadShortcut(forKey: Key.globalCopyJoinedWithSpacesShortcut)
         if userDefaults.object(forKey: Key.globalCopyJoinedEnabled) != nil {
             settings.globalCopyJoinedEnabled = userDefaults.bool(forKey: Key.globalCopyJoinedEnabled)
         }
         if userDefaults.object(forKey: Key.globalCopyNormalizedEnabled) != nil {
             settings.globalCopyNormalizedEnabled = userDefaults.bool(forKey: Key.globalCopyNormalizedEnabled)
+        }
+        if userDefaults.object(forKey: Key.globalCopyJoinedWithSpacesEnabled) != nil {
+            settings.globalCopyJoinedWithSpacesEnabled = userDefaults.bool(forKey: Key.globalCopyJoinedWithSpacesEnabled)
         }
         if let shortcut = loadShortcut(forKey: Key.togglePinShortcut) {
             settings.togglePinShortcut = shortcut
@@ -594,17 +639,27 @@ final class UserDefaultsAppSettingsStore: AppSettingsStore {
         if let shortcut = loadShortcut(forKey: Key.copyNormalizedShortcut) {
             settings.copyNormalizedShortcut = shortcut
         }
+        if let shortcut = loadShortcut(forKey: Key.copyJoinedWithSpacesShortcut) {
+            settings.copyJoinedWithSpacesShortcut = shortcut
+        }
         if let shortcut = loadShortcut(forKey: Key.toggleMarkdownPreviewShortcut) {
             settings.toggleMarkdownPreviewShortcut = shortcut
         }
         if let shortcut = loadShortcut(forKey: Key.joinLinesShortcut) {
             settings.joinLinesShortcut = shortcut
         }
+        if let shortcut = loadShortcut(forKey: Key.joinLinesWithSpacesShortcut) {
+            settings.joinLinesWithSpacesShortcut = shortcut
+        }
         if let shortcut = loadShortcut(forKey: Key.normalizeForCommandShortcut) {
             settings.normalizeForCommandShortcut = shortcut
         }
         if let shortcut = loadShortcut(forKey: Key.orphanCodexDiscardShortcut) {
             settings.orphanCodexDiscardShortcut = shortcut
+        }
+        if let rawValue = userDefaults.string(forKey: Key.joinLineBreakStrategy),
+           let strategy = JoinLineBreakStrategy(rawValue: rawValue) {
+            settings.joinLineBreakStrategy = strategy
         }
         if userDefaults.object(forKey: Key.launchAtLogin) != nil {
             settings.launchAtLogin = userDefaults.bool(forKey: Key.launchAtLogin)
@@ -674,8 +729,10 @@ final class UserDefaultsAppSettingsStore: AppSettingsStore {
         saveOptionalShortcut(settings.globalNewNoteShortcut, forKey: Key.globalNewNoteShortcut)
         saveOptionalShortcut(settings.globalCopyJoinedShortcut, forKey: Key.globalCopyJoinedShortcut)
         saveOptionalShortcut(settings.globalCopyNormalizedShortcut, forKey: Key.globalCopyNormalizedShortcut)
+        saveOptionalShortcut(settings.globalCopyJoinedWithSpacesShortcut, forKey: Key.globalCopyJoinedWithSpacesShortcut)
         userDefaults.set(settings.globalCopyJoinedEnabled, forKey: Key.globalCopyJoinedEnabled)
         userDefaults.set(settings.globalCopyNormalizedEnabled, forKey: Key.globalCopyNormalizedEnabled)
+        userDefaults.set(settings.globalCopyJoinedWithSpacesEnabled, forKey: Key.globalCopyJoinedWithSpacesEnabled)
         saveShortcut(settings.togglePinShortcut, forKey: Key.togglePinShortcut)
         saveShortcut(settings.togglePinnedAreaShortcut, forKey: Key.togglePinnedAreaShortcut)
         saveShortcut(settings.newNoteShortcut, forKey: Key.newNoteShortcut)
@@ -690,10 +747,13 @@ final class UserDefaultsAppSettingsStore: AppSettingsStore {
         saveShortcut(settings.moveLineDownShortcut, forKey: Key.moveLineDownShortcut)
         saveShortcut(settings.copyJoinedShortcut, forKey: Key.copyJoinedShortcut)
         saveShortcut(settings.copyNormalizedShortcut, forKey: Key.copyNormalizedShortcut)
+        saveShortcut(settings.copyJoinedWithSpacesShortcut, forKey: Key.copyJoinedWithSpacesShortcut)
         saveShortcut(settings.toggleMarkdownPreviewShortcut, forKey: Key.toggleMarkdownPreviewShortcut)
         saveShortcut(settings.joinLinesShortcut, forKey: Key.joinLinesShortcut)
+        saveShortcut(settings.joinLinesWithSpacesShortcut, forKey: Key.joinLinesWithSpacesShortcut)
         saveShortcut(settings.normalizeForCommandShortcut, forKey: Key.normalizeForCommandShortcut)
         saveShortcut(settings.orphanCodexDiscardShortcut, forKey: Key.orphanCodexDiscardShortcut)
+        userDefaults.set(settings.joinLineBreakStrategy.rawValue, forKey: Key.joinLineBreakStrategy)
         userDefaults.set(settings.launchAtLogin, forKey: Key.launchAtLogin)
         userDefaults.set(settings.translationTargetLanguage, forKey: Key.translationTargetLanguage)
         userDefaults.set(max(1, settings.historyLimit), forKey: Key.historyLimit)
@@ -779,6 +839,10 @@ final class UserDefaultsAppSettingsStore: AppSettingsStore {
             settings.globalCopyNormalizedShortcut = AppSettings.defaultGlobalCopyNormalizedShortcut
             didMigrate = true
         }
+        if settings.globalCopyJoinedWithSpacesShortcut == nil {
+            settings.globalCopyJoinedWithSpacesShortcut = AppSettings.defaultGlobalCopyJoinedWithSpacesShortcut
+            didMigrate = true
+        }
         if settings.copyJoinedShortcut == AppSettings.legacyJoinLinesShortcut {
             settings.copyJoinedShortcut = AppSettings.default.copyJoinedShortcut
             didMigrate = true
@@ -787,8 +851,16 @@ final class UserDefaultsAppSettingsStore: AppSettingsStore {
             settings.copyNormalizedShortcut = AppSettings.default.copyNormalizedShortcut
             didMigrate = true
         }
+        if loadShortcut(forKey: Key.copyJoinedWithSpacesShortcut) == nil {
+            settings.copyJoinedWithSpacesShortcut = AppSettings.default.copyJoinedWithSpacesShortcut
+            didMigrate = true
+        }
         if settings.joinLinesShortcut == AppSettings.legacyJoinLinesShortcut {
             settings.joinLinesShortcut = AppSettings.default.joinLinesShortcut
+            didMigrate = true
+        }
+        if loadShortcut(forKey: Key.joinLinesWithSpacesShortcut) == nil {
+            settings.joinLinesWithSpacesShortcut = AppSettings.default.joinLinesWithSpacesShortcut
             didMigrate = true
         }
         if settings.normalizeForCommandShortcut == AppSettings.legacyNormalizeForCommandShortcut {
@@ -797,6 +869,7 @@ final class UserDefaultsAppSettingsStore: AppSettingsStore {
         }
         settings.globalCopyJoinedEnabled = true
         settings.globalCopyNormalizedEnabled = true
+        settings.globalCopyJoinedWithSpacesEnabled = true
         if loadShortcut(forKey: Key.orphanCodexDiscardShortcut) == nil {
             settings.orphanCodexDiscardShortcut = AppSettings.defaultOrphanCodexDiscardShortcut
             didMigrate = true

@@ -81,6 +81,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         case close
     }
 
+    enum PanelHotKeyRouting: Equatable {
+        case togglePanel
+        case bringSettingsToFront
+        case suspendRegistration
+    }
+
     struct CodexDraftContext: Equatable {
         let sessionID: String
         let projectRootURL: URL?
@@ -121,69 +127,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         static let validationHooks = "--validation-hooks"
     }
 
-    private enum ValidationCommandAction: String {
-        case openPanel
-        case togglePanelFromStatusItem
-        case captureSnapshot
-        case captureWindowImage
-        case openFile
-        case openNewNote
-        case openSettings
-        case openHelp
-        case movePanelSelectionDown
-        case movePanelSelectionUp
-        case movePanelSelectionLeft
-        case movePanelSelectionRight
-        case commitPanelSelection
-        case togglePanelPinnedArea
-        case togglePinSelectedPanelItem
-        case togglePinFocusedPanelItem
-        case deleteSelectedPanelItem
-        case deleteFocusedPanelItem
-        case openSelectedPanelEditor
-        case openFocusedPanelEditor
-        case copySelectedPanelItem
-        case pasteSelectedPanelItem
-        case joinSelectedPanelItem
-        case normalizeSelectedPanelItem
-        case setPanelEditorText
-        case commitPanelEditor
-        case cancelPanelEditor
-        case toggleCurrentEditorMarkdownPreview
-        case setCurrentEditorText
-        case setCurrentEditorSelection
-        case setCurrentPreviewWidth
-        case setCurrentPreviewScroll
-        case syncCurrentPreviewScroll
-        case selectCurrentPreviewText
-        case selectCurrentPreviewCodeBlock
-        case copyCurrentPreviewSelection
-        case measureCurrentPreviewHorizontalOverflow
-        case clickCurrentPreviewFirstLink
-        case respondToPreviewLinkPrompt
-        case saveCurrentEditor
-        case saveCurrentEditorAs
-        case saveCurrentEditorToFile
-        case closeCurrentEditor
-        case commitCurrentEditor
-        case respondToAttachedSheet
-        case increaseZoom
-        case decreaseZoom
-        case resetZoom
-        case setSettingsLanguage
-        case setThemePreset
-        case setPanelShortcut
-        case setToggleMarkdownPreviewShortcut
-        case setGlobalCopyJoinedEnabled
-        case setGlobalCopyNormalizedEnabled
-        case runGlobalCopyJoined
-        case runGlobalCopyNormalized
-        case inspectCodexIntegration
-        case resetValidationState
-        case syncClipboardCapture
-        case seedHistoryText
-    }
-
     private enum ValidationAttachedSheetContext: String {
         case closeUnsavedEditor
         case closeUnsavedManualNote
@@ -192,10 +135,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         case externalFileChange
     }
 
+    private enum ValidationFrontmostWindowKind: String, Codable {
+        case panel
+        case settings
+        case noteEditor
+        case standaloneNote
+        case help
+        case none
+    }
+
     private struct ValidationSnapshot: Codable {
         let statusItemPresent: Bool
         let panelVisible: Bool
         let panelFrontmost: Bool
+        let frontmostWindowKind: String
         let panelPinnedAreaVisible: Bool
         let panelSelectionScope: String
         let highlightedPanelItemID: String?
@@ -239,6 +192,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         let toggleMarkdownPreviewShortcutDisplay: String
         let globalCopyJoinedEnabled: Bool
         let globalCopyNormalizedEnabled: Bool
+        let globalCopyJoinedWithSpacesEnabled: Bool
         let selectedFillDiffersFromCardFill: Bool
         let previewSelectedText: String?
         let previewScrollFraction: Double?
@@ -264,31 +218,194 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     }
     private let showsAnchorDebugMarkers = false
     
-    private enum MenuTag: Int {
-        case togglePanel = 100
-        case openSettings = 101
-        case newNote = 102
-        case openFile = 103
-        case quit = 199
-    }
-    
-    var panel: ClipboardPanel!
     var dataManager: ClipboardDataManager!
     var clipboardController: ClipboardController!
     var sharedContainer: ModelContainer!
     
-    private var statusItem: NSStatusItem?
-    private let statusMenu = NSMenu()
+    private let windowShellState = WindowShellCoordinator.State()
     private var previouslyActiveApp: NSRunningApplication?
     private var placementTargetApp: NSRunningApplication?
+    private let pasteTargetingService = PasteTargetingService()
+    private let editorCommandDispatcher = EditorCommandDispatcher()
+    private lazy var validationCoordinator = ValidationCoordinator(
+        applicationCallbacks: .init(
+            openPanel: { [weak self] in
+                self?.showPanel()
+            },
+            togglePanelFromStatusItem: { [weak self] in
+                self?.togglePanelFromStatusItem()
+            },
+            captureSnapshot: { [weak self] url in
+                self?.writeValidationSnapshot(to: url)
+            },
+            captureWindowImage: { [weak self] rawKind, url in
+                self?.captureValidationWindowImage(kind: rawKind, to: url)
+            },
+            openFile: { [weak self] url in
+                _ = self?.openTextDocumentForValidation(at: url)
+            },
+            openNewNote: { [weak self] in
+                self?.createNewNoteFromAnyState()
+            },
+            openSettings: { [weak self] in
+                self?.openSettingsWindow()
+            },
+            openHelp: { [weak self] in
+                self?.toggleHelpPanel(isEditingSelectedText: false)
+            },
+            runGlobalCopyJoined: { [weak self] in
+                guard let self else { return }
+                self.copySelectedTextFromCurrentContext(
+                    feedbackMessage: "One Line",
+                    transform: { [settings = self.settings] text in
+                        joinLinesText(text, strategy: settings.joinLineBreakStrategy)
+                    }
+                )
+            },
+            runGlobalCopyJoinedWithSpaces: { [weak self] in
+                self?.copySelectedTextFromCurrentContext(
+                    feedbackMessage: "One Line + Space",
+                    transform: { text in
+                        joinLinesText(text, strategy: .replaceWithSpace)
+                    }
+                )
+            },
+            runGlobalCopyNormalized: { [weak self] in
+                self?.copySelectedTextFromCurrentContext(
+                    feedbackMessage: "Normalized",
+                    transform: normalizeCommandText
+                )
+            },
+            inspectCodexIntegration: { [weak self] in
+                _ = self?.codexIntegrationStatus(inspectShellConfig: true)
+            },
+            resetValidationState: { [weak self] in
+                self?.resetValidationState()
+            },
+            syncClipboardCapture: { [weak self] in
+                self?.clipboardController.syncNow()
+            },
+            seedHistoryText: { [weak self] text in
+                self?.validationSeedHistoryText(text)
+            },
+            reassertForegroundIfNeeded: { [weak self] in
+                self?.reassertForegroundForValidationIfNeeded()
+            }
+        ),
+        panelCallbacks: .init(
+            postPanelAction: { [weak self] action, text in
+                self?.postPanelValidationAction(action, text: text)
+            },
+            readTextFile: { path in
+                (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+            }
+        ),
+        editorCallbacks: .init(
+            currentSurface: { [weak self] in
+                self?.currentValidationEditorSurface() ?? .none
+            },
+            readTextFile: { path in
+                (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+            },
+            postEditorCommand: { [weak self] command, text in
+                self?.postEditorCommand(command, text: text)
+            },
+            saveNoteEditor: { [weak self] in
+                (self?.saveStandaloneEditor()) != nil
+            },
+            saveStandaloneNote: { [weak self] in
+                (self?.saveStandaloneManualNoteEditor()) != nil
+            },
+            saveNoteEditorAs: { [weak self] in
+                (self?.saveStandaloneEditorAs()) != nil
+            },
+            saveStandaloneNoteAs: { [weak self] in
+                (self?.saveStandaloneManualNoteEditorAs()) != nil
+            },
+            saveCurrentEditorToFile: { [weak self] url in
+                self?.validationSaveCurrentEditorToFile(url) ?? false
+            },
+            closeNoteEditor: { [weak self] in
+                self?.closeStandaloneNoteEditor()
+            },
+            closeStandaloneNote: { [weak self] in
+                self?.closeStandaloneManualNoteEditor()
+            },
+            respondToAttachedSheet: { [weak self] rawChoice in
+                self?.respondToValidationAttachedSheet(choice: rawChoice)
+            }
+        ),
+        previewCallbacks: .init(
+            setPreviewWidth: { width in
+                NotificationCenter.default.post(
+                    name: .editorViewValidationRequested,
+                    object: nil,
+                    userInfo: ["action": "setPreviewWidth", "value": width]
+                )
+            },
+            setPreviewScroll: { [weak self] progress in
+                self?.validationSetCurrentPreviewScroll(progress)
+            },
+            syncPreviewScroll: { [weak self] in
+                self?.validationSyncCurrentPreviewScroll()
+            },
+            selectPreviewText: { [weak self] needle, preferCodeBlock in
+                self?.validationSelectCurrentPreviewText(containing: needle, preferCodeBlock: preferCodeBlock)
+            },
+            copyPreviewSelection: { [weak self] in
+                self?.validationCopyCurrentPreviewSelection()
+            },
+            measurePreviewHorizontalOverflow: { [weak self] in
+                self?.validationMeasureCurrentPreviewHorizontalOverflow()
+            },
+            clickPreviewFirstLink: { [weak self] in
+                self?.validationClickCurrentPreviewFirstLink()
+            },
+            respondToPreviewLinkPrompt: { [weak self] rawChoice in
+                self?.validationRespondToPreviewLinkPrompt(rawChoice)
+            }
+        ),
+        settingsCallbacks: .init(
+            increaseZoom: { [weak self] in
+                self?.increaseInterfaceZoom()
+            },
+            decreaseZoom: { [weak self] in
+                self?.decreaseInterfaceZoom()
+            },
+            resetZoom: { [weak self] in
+                self?.resetInterfaceZoom()
+            },
+            setSettingsLanguage: { [weak self] language in
+                self?.updateSettingsLanguage(language)
+            },
+            setThemePreset: { [weak self] theme in
+                self?.updateInterfaceThemePreset(theme)
+            },
+            setPanelShortcut: { [weak self] rawValue in
+                self?.validationSetPanelShortcut(rawValue)
+            },
+            setToggleMarkdownPreviewShortcut: { [weak self] rawValue in
+                self?.validationSetToggleMarkdownPreviewShortcut(rawValue)
+            },
+            setGlobalCopyJoinedEnabled: { [weak self] enabled in
+                self?.validationSetGlobalSpecialCopyEnabled(joined: enabled)
+            },
+            setGlobalCopyJoinedWithSpacesEnabled: { [weak self] enabled in
+                self?.validationSetGlobalSpecialCopyEnabled(joinedWithSpaces: enabled)
+            },
+            setGlobalCopyNormalizedEnabled: { [weak self] enabled in
+                self?.validationSetGlobalSpecialCopyEnabled(normalized: enabled)
+            }
+        )
+    )
     private var highlightedPanelItem: ClipboardItem?
     private var focusedPanelItem: ClipboardItem?
+    private var pasteTargetSnapshot: PasteTargetSnapshot?
     private var panelInlineEditingItemID: UUID?
     private var panelInlineEditorDirty = false
     private var panelInlineEditorPreviewVisible = false
-    private var settingsWindowController: NSWindowController?
-    private var settingsWindowCloseObserver: NSObjectProtocol?
     private var standaloneNoteWindowController: NSWindowController?
+    private var standaloneNoteSessionID: EditorSessionID?
     private var standaloneNoteItemID: UUID?
     private var standaloneNoteDraftText = ""
     private var standaloneNoteLastPersistedText = ""
@@ -296,6 +413,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     private var standaloneNoteAutosaveWorkItem: DispatchWorkItem?
     private var standaloneNoteMarkdownPreviewVisible = false
     private var noteEditorWindowController: NSWindowController?
+    private var noteEditorSessionID: EditorSessionID?
     private var noteEditorItemID: UUID?
     private var noteEditorExternalFileURL: URL?
     private var noteEditorExternalMode: ExternalEditorMode?
@@ -316,13 +434,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     private var noteEditorCodexSessionID: String?
     private var noteEditorCodexProjectRootURL: URL?
     private var lastClosedNoteEditorItemID: UUID?
-    private var helpPanel: NSPanel?
     private var floatingFeedbackPanel: NSPanel?
     private var floatingFeedbackRootView: NSView?
     private var floatingFeedbackLabel: NSTextField?
     private var floatingFeedbackBackgroundView: NSView?
     private var floatingFeedbackDismissTask: DispatchWorkItem?
-    private var helpRequestObserver: NSObjectProtocol?
     private var validationCommandObserver: NSObjectProtocol?
     private var validationAttachedSheetContext: ValidationAttachedSheetContext?
     private let codexOpenRequestMonitorQueue = DispatchQueue(
@@ -334,10 +450,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     private var codexOpenRequestTimer: DispatchSourceTimer?
     private var codexSessionStateMonitor: DispatchSourceTimer?
     private var suppressPanelAutoClose = false
-    private var panelAutoCloseSuppressionTask: DispatchWorkItem?
     private var panelPinnedAreaVisible = false
-    private weak var panelReturnWindow: NSWindow?
-    private var launchAutomationAutoCloseSuppressionTask: DispatchWorkItem?
     private var anchorDebugWindows: [String: NSWindow] = [:]
     private var anchorDebugHideTask: DispatchWorkItem?
     private var lastAnchorPoint: NSPoint?
@@ -358,9 +471,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     private var globalNewNoteHotKeyRegistrationID: UInt32?
     private var globalCopyJoinedHotKeyRegistrationID: UInt32?
     private var globalCopyNormalizedHotKeyRegistrationID: UInt32?
-    private var hasPresentedPanelThisLaunch = false
+    private var globalCopyJoinedWithSpacesHotKeyRegistrationID: UInt32?
+    private lazy var windowShellCoordinator = makeWindowShellCoordinator()
     private var isRunningValidationHooks: Bool {
         ProcessInfo.processInfo.arguments.contains(LaunchArgument.validationHooks)
+    }
+
+    var panel: ClipboardPanel! {
+        get { windowShellState.panel }
+        set { windowShellState.panel = newValue }
+    }
+
+    private var statusItem: NSStatusItem? {
+        get { windowShellState.statusItem }
+        set { windowShellState.statusItem = newValue }
+    }
+
+    private var settingsWindowController: NSWindowController? {
+        get { windowShellState.settingsWindowController }
+        set { windowShellState.settingsWindowController = newValue }
+    }
+
+    private var settingsShortcutCaptureActive: Bool {
+        get { windowShellState.settingsShortcutCaptureActive }
+        set { windowShellState.settingsShortcutCaptureActive = newValue }
+    }
+
+    private var helpPanel: NSPanel? {
+        get { windowShellState.helpPanel }
+        set { windowShellState.helpPanel = newValue }
+    }
+
+    private var hasPresentedPanelThisLaunch: Bool {
+        get { windowShellState.hasPresentedPanelThisLaunch }
+        set { windowShellState.hasPresentedPanelThisLaunch = newValue }
+    }
+
+    private var panelReturnWindow: NSWindow? {
+        get { windowShellState.panelReturnWindow }
+        set { windowShellState.panelReturnWindow = newValue }
     }
 
     private var hasAnyClipboardWindowVisible: Bool {
@@ -387,16 +536,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         let isDraggable: Bool
     }
 
-    struct TargetAppDecision: Equatable {
-        let frontmostPID: pid_t?
-        let placementPID: pid_t?
-        let previousPID: pid_t?
-        let currentPID: pid_t
-        let frontmostTerminated: Bool
-        let placementTerminated: Bool
-        let previousTerminated: Bool
-    }
-
     struct HelpPanelPlacement: Equatable {
         enum Side: Equatable {
             case right
@@ -408,32 +547,147 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         let side: Side
     }
 
-    static func preferredTargetPID(for decision: TargetAppDecision) -> pid_t? {
-        if let frontmostPID = decision.frontmostPID,
-           frontmostPID != decision.currentPID,
-           !decision.frontmostTerminated {
-            return frontmostPID
-        }
-
-        if let placementPID = decision.placementPID,
-           placementPID != decision.currentPID,
-           !decision.placementTerminated {
-            return placementPID
-        }
-
-        if let previousPID = decision.previousPID,
-           previousPID != decision.currentPID,
-           !decision.previousTerminated {
-            return previousPID
-        }
-
-        return nil
-    }
-
     static var isRunningAutomatedTests: Bool {
         let environment = ProcessInfo.processInfo.environment
         return environment["XCTestConfigurationFilePath"] != nil
             || environment["XCTestBundlePath"] != nil
+    }
+
+    private func makeWindowShellCoordinator() -> WindowShellCoordinator {
+        WindowShellCoordinator(
+            state: windowShellState,
+            callbacks: .init(
+                makePanelContentView: { [unowned self] in
+                    NSHostingView(rootView: self.makePanelRootView())
+                },
+                makeSettingsViewController: { [unowned self] in
+                    let rootView = SettingsView(appDelegate: self)
+                        .modelContainer(self.sharedContainer)
+                    return NSHostingController(rootView: rootView)
+                },
+                currentSettings: { [unowned self] in
+                    self.settings
+                },
+                panelShortcutDisplay: { [unowned self] in
+                    HotKeyManager.displayString(for: self.panelHotKeyShortcut)
+                },
+                translateShortcutDisplay: { [unowned self] in
+                    HotKeyManager.displayString(for: self.translateHotKeyShortcut)
+                },
+                newNoteShortcutDisplay: { [unowned self] in
+                    HotKeyManager.displayString(for: self.settings.newNoteShortcut)
+                },
+                initialPanelSize: { [unowned self] in
+                    self.preferredPanelSize()
+                },
+                preparePanelPresentation: { [unowned self] in
+                    let targetApp = self.preferredPlacementTargetApp() ?? self.currentPlacementTargetApp()
+                    self.capturePasteTargetSnapshot(for: self.currentPlacementTargetApp() ?? targetApp)
+                    if let targetApp, targetApp != NSRunningApplication.current {
+                        self.previouslyActiveApp = targetApp
+                        self.placementTargetApp = targetApp
+                    }
+                    let presentationContext = self.panelPresentationContext()
+                    NotificationCenter.default.post(
+                        name: .clipboardPanelWillOpen,
+                        object: nil,
+                        userInfo: [
+                            "targetAppName": self.previouslyActiveApp?.localizedName ?? "",
+                            "targetArrowSymbol": presentationContext.targetArrowSymbol
+                        ]
+                    )
+                    return WindowShellPanelPresentation(
+                        finalFrame: presentationContext.finalFrame,
+                        anchorPoint: presentationContext.anchorPoint,
+                        anchorDescription: presentationContext.anchorDescription,
+                        anchorDebugCandidates: presentationContext.anchorDebugCandidates.map {
+                            WindowShellAnchorDebugCandidate(
+                                point: $0.point,
+                                label: $0.label,
+                                color: $0.color,
+                                isDraggable: $0.isDraggable
+                            )
+                        }
+                    )
+                },
+                shouldShowAnchorDebugMarkers: { [unowned self] in
+                    self.showsAnchorDebugMarkers
+                },
+                showAnchorDebugMarkers: { [unowned self] candidates, fallbackPoint, description in
+                    let mapped = candidates.enumerated().map { index, candidate in
+                        AnchorDebugCandidate(
+                            id: "shell-\(index)-\(candidate.label)",
+                            point: candidate.point,
+                            label: candidate.label,
+                            color: candidate.color,
+                            isDraggable: candidate.isDraggable
+                        )
+                    }
+                    self.showAnchorDebugMarkers(mapped, fallbackPoint: fallbackPoint, description: description)
+                },
+                panelCanAutoClose: { [unowned self] in
+                    !self.suppressPanelAutoClose
+                },
+                setPanelAutoCloseSuppressed: { [unowned self] isSuppressed in
+                    self.suppressPanelAutoClose = isSuppressed
+                },
+                syncClipboardNow: { [unowned self] in
+                    self.clipboardController.syncNow()
+                },
+                activateCurrentApp: { [unowned self] unhideAllWindows in
+                    self.activateCurrentApp(unhideAllWindows: unhideAllWindows)
+                },
+                closePanelAndReactivate: { [unowned self] in
+                    self.closePanelAndReactivate()
+                },
+                persistPanelSize: { [unowned self] size in
+                    self.persistPanelSize(size)
+                },
+                suspendNonPanelHotKeys: { [unowned self] in
+                    self.suspendNonPanelHotKeys()
+                },
+                registerHotKeys: { [unowned self] in
+                    self.registerHotKeys()
+                },
+                settingsDesiredFrame: { [unowned self] window, panelWasVisible in
+                    self.settingsDesiredFrame(for: window, panelWasVisible: panelWasVisible)
+                },
+                helpPanelFrame: { [unowned self] helpPanel in
+                    self.helpPanelFrame(for: helpPanel)
+                },
+                onTranslateRequested: { [unowned self] in
+                    self.translateCurrentContext()
+                },
+                onCreateNewNoteRequested: { [unowned self] in
+                    self.createNewNoteFromAnyState()
+                },
+                onOpenFileRequested: { [unowned self] preferredKind in
+                    self.openTextDocumentViaPanel(preferredKind: preferredKind)
+                }
+            )
+        )
+    }
+
+    private func settingsDesiredFrame(for window: NSWindow, panelWasVisible: Bool) -> NSRect {
+        if panelWasVisible {
+            let screen = screen(containing: panel.frame) ?? panel.screen ?? NSScreen.main
+            let visibleFrame = (screen?.visibleFrame ?? window.frame).insetBy(dx: Layout.screenMargin, dy: Layout.screenMargin)
+            return WindowShellPolicy.auxiliaryWindowPlacement(
+                anchorFrame: panel.frame,
+                visibleFrame: visibleFrame,
+                windowSize: window.frame.size,
+                gap: 16
+            )
+        }
+
+        let screen = NSScreen.main
+        let visibleFrame = (screen?.visibleFrame ?? window.frame).insetBy(dx: Layout.screenMargin, dy: Layout.screenMargin)
+        return NSRect(
+            x: visibleFrame.midX - (window.frame.width / 2),
+            y: visibleFrame.midY - (window.frame.height / 2),
+            width: window.frame.width,
+            height: window.frame.height
+        )
     }
 
     @MainActor
@@ -632,192 +886,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     }
 
     private func handleValidationCommand(_ notification: Notification) {
-        guard
-            let actionRaw = notification.userInfo?["action"] as? String,
-            let action = ValidationCommandAction(rawValue: actionRaw)
-        else {
+        guard let actionRaw = notification.userInfo?["action"] as? String else {
             return
         }
 
-        switch action {
-        case .openPanel:
-            showPanel()
-            reassertForegroundForValidationIfNeeded()
-        case .togglePanelFromStatusItem:
-            togglePanelFromStatusItem()
-            reassertForegroundForValidationIfNeeded()
-        case .captureSnapshot:
-            guard let path = notification.userInfo?["path"] as? String else { return }
-            writeValidationSnapshot(to: URL(fileURLWithPath: path))
-        case .captureWindowImage:
-            guard let path = notification.userInfo?["path"] as? String,
-                  let windowKind = notification.userInfo?["window"] as? String else { return }
-            captureValidationWindowImage(kind: windowKind, to: URL(fileURLWithPath: path))
-        case .openFile:
-            guard let path = notification.userInfo?["path"] as? String else { return }
-            _ = handleTextDocumentOpenURLs([URL(fileURLWithPath: path)])
-            reassertForegroundForValidationIfNeeded()
-        case .openNewNote:
-            createNewNoteFromAnyState()
-            reassertForegroundForValidationIfNeeded()
-        case .openSettings:
-            openSettingsWindow()
-            reassertForegroundForValidationIfNeeded()
-        case .openHelp:
-            toggleHelpPanel(isEditingSelectedText: false)
-            reassertForegroundForValidationIfNeeded()
-        case .movePanelSelectionDown:
-            postPanelValidationAction("moveDown")
-        case .movePanelSelectionUp:
-            postPanelValidationAction("moveUp")
-        case .movePanelSelectionLeft:
-            postPanelValidationAction("moveLeft")
-        case .movePanelSelectionRight:
-            postPanelValidationAction("moveRight")
-        case .commitPanelSelection:
-            postPanelValidationAction("commitSelection")
-        case .togglePanelPinnedArea:
-            postPanelValidationAction("togglePinnedArea")
-        case .togglePinSelectedPanelItem:
-            postPanelValidationAction("togglePin")
-        case .togglePinFocusedPanelItem:
-            postPanelValidationAction("togglePinFocused")
-        case .deleteSelectedPanelItem:
-            postPanelValidationAction("deleteSelected")
-        case .deleteFocusedPanelItem:
-            postPanelValidationAction("deleteFocused")
-        case .openSelectedPanelEditor:
-            postPanelValidationAction("toggleEditor")
-        case .openFocusedPanelEditor:
-            postPanelValidationAction("openFocusedEditor")
-        case .copySelectedPanelItem:
-            postPanelValidationAction("copySelected")
-        case .pasteSelectedPanelItem:
-            postPanelValidationAction("pasteSelected")
-        case .joinSelectedPanelItem:
-            postPanelValidationAction("joinSelected")
-        case .normalizeSelectedPanelItem:
-            postPanelValidationAction("normalizeSelected")
-        case .setPanelEditorText:
-            guard let path = notification.userInfo?["path"] as? String else { return }
-            let text = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
-            postPanelValidationAction("setEditorText", text: text)
-        case .commitPanelEditor:
-            postPanelValidationAction("commitEditor")
-        case .cancelPanelEditor:
-            postPanelValidationAction("cancelEditor")
-        case .toggleCurrentEditorMarkdownPreview:
-            postEditorCommand(.toggleMarkdownPreview)
-        case .setCurrentEditorText:
-            guard let path = notification.userInfo?["path"] as? String else { return }
-            let text = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
-            postEditorCommand(.setText, text: text)
-        case .setCurrentEditorSelection:
-            guard let rawValue = notification.userInfo?["path"] as? String else { return }
-            postEditorCommand(.setSelectionLocation, text: rawValue)
-        case .setCurrentPreviewWidth:
-            guard let rawValue = notification.userInfo?["path"] as? String,
-                  let width = Double(rawValue) else { return }
-            NotificationCenter.default.post(
-                name: .editorViewValidationRequested,
-                object: nil,
-                userInfo: ["action": "setPreviewWidth", "value": width]
-            )
-        case .setCurrentPreviewScroll:
-            guard let rawValue = notification.userInfo?["path"] as? String,
-                  let progress = Double(rawValue) else { return }
-            validationSetCurrentPreviewScroll(progress)
-        case .syncCurrentPreviewScroll:
-            validationSyncCurrentPreviewScroll()
-        case .selectCurrentPreviewText:
-            guard let rawValue = notification.userInfo?["path"] as? String else { return }
-            validationSelectCurrentPreviewText(containing: rawValue, preferCodeBlock: false)
-        case .selectCurrentPreviewCodeBlock:
-            guard let rawValue = notification.userInfo?["path"] as? String else { return }
-            validationSelectCurrentPreviewText(containing: rawValue, preferCodeBlock: true)
-        case .copyCurrentPreviewSelection:
-            validationCopyCurrentPreviewSelection()
-        case .measureCurrentPreviewHorizontalOverflow:
-            validationMeasureCurrentPreviewHorizontalOverflow()
-        case .clickCurrentPreviewFirstLink:
-            validationClickCurrentPreviewFirstLink()
-        case .respondToPreviewLinkPrompt:
-            guard let rawValue = notification.userInfo?["path"] as? String else { return }
-            validationRespondToPreviewLinkPrompt(rawValue)
-        case .saveCurrentEditor:
-            if standaloneNoteWindowController?.window?.isVisible == true {
-                _ = saveStandaloneManualNoteEditor()
-            } else if noteEditorWindowController?.window?.isVisible == true {
-                _ = saveStandaloneEditor()
-            }
-        case .saveCurrentEditorAs:
-            if standaloneNoteWindowController?.window?.isVisible == true {
-                _ = saveStandaloneManualNoteEditorAs()
-            } else if noteEditorWindowController?.window?.isVisible == true {
-                _ = saveStandaloneEditorAs()
-            }
-        case .saveCurrentEditorToFile:
-            guard let path = notification.userInfo?["path"] as? String else { return }
-            _ = validationSaveCurrentEditorToFile(URL(fileURLWithPath: path))
-        case .closeCurrentEditor:
-            if standaloneNoteWindowController?.window?.isVisible == true {
-                closeStandaloneManualNoteEditor()
-            } else if noteEditorWindowController?.window?.isVisible == true {
-                closeStandaloneNoteEditor()
-            }
-        case .commitCurrentEditor:
-            postEditorCommand(.commit)
-        case .respondToAttachedSheet:
-            guard let rawChoice = notification.userInfo?["path"] as? String else { return }
-            respondToValidationAttachedSheet(choice: rawChoice)
-        case .increaseZoom:
-            increaseInterfaceZoom()
-        case .decreaseZoom:
-            decreaseInterfaceZoom()
-        case .resetZoom:
-            resetInterfaceZoom()
-        case .setSettingsLanguage:
-            guard let rawValue = notification.userInfo?["path"] as? String,
-                  let language = SettingsLanguage(rawValue: rawValue) else { return }
-            updateSettingsLanguage(language)
-        case .setThemePreset:
-            guard let rawValue = notification.userInfo?["path"] as? String,
-                  let theme = InterfaceThemePreset(rawValue: rawValue) else { return }
-            updateInterfaceThemePreset(theme)
-        case .setPanelShortcut:
-            guard let rawValue = notification.userInfo?["path"] as? String else { return }
-            validationSetPanelShortcut(rawValue)
-        case .setToggleMarkdownPreviewShortcut:
-            guard let rawValue = notification.userInfo?["path"] as? String else { return }
-            validationSetToggleMarkdownPreviewShortcut(rawValue)
-        case .setGlobalCopyJoinedEnabled:
-            validationSetGlobalSpecialCopyEnabled(
-                joined: (notification.userInfo?["path"] as? String).flatMap(Bool.init) ?? false
-            )
-        case .setGlobalCopyNormalizedEnabled:
-            validationSetGlobalSpecialCopyEnabled(
-                normalized: (notification.userInfo?["path"] as? String).flatMap(Bool.init) ?? false
-            )
-        case .runGlobalCopyJoined:
-            copySelectedTextFromCurrentContext(
-                feedbackMessage: "One Line",
-                transform: joinLinesText
-            )
-        case .runGlobalCopyNormalized:
-            copySelectedTextFromCurrentContext(
-                feedbackMessage: "Normalized",
-                transform: normalizeCommandText
-            )
-        case .inspectCodexIntegration:
-            _ = codexIntegrationStatus(inspectShellConfig: true)
-        case .resetValidationState:
-            resetValidationState()
-        case .syncClipboardCapture:
-            clipboardController.syncNow()
-        case .seedHistoryText:
-            guard let rawValue = notification.userInfo?["path"] as? String else { return }
-            validationSeedHistoryText(rawValue)
-        }
+        let userInfo = notification.userInfo ?? [:]
+        _ = validationCoordinator.handleAction(rawAction: actionRaw, userInfo: userInfo)
     }
 
     private func validationSeedHistoryText(_ text: String) {
@@ -846,6 +920,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             window.orderOut(nil)
         }
         noteEditorWindowController = nil
+        noteEditorSessionID = nil
 
         if let window = standaloneNoteWindowController?.window {
             window.delegate = nil
@@ -853,6 +928,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             window.orderOut(nil)
         }
         standaloneNoteWindowController = nil
+        standaloneNoteSessionID = nil
 
         let allItems = dataManager.allItems()
         for item in allItems {
@@ -917,15 +993,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             || settings.toggleMarkdownPreviewShortcut != AppSettings.default.toggleMarkdownPreviewShortcut
             || settings.globalCopyJoinedShortcut != AppSettings.default.globalCopyJoinedShortcut
             || settings.globalCopyNormalizedShortcut != AppSettings.default.globalCopyNormalizedShortcut
+            || settings.globalCopyJoinedWithSpacesShortcut != AppSettings.default.globalCopyJoinedWithSpacesShortcut
             || settings.globalCopyJoinedEnabled != AppSettings.default.globalCopyJoinedEnabled
-            || settings.globalCopyNormalizedEnabled != AppSettings.default.globalCopyNormalizedEnabled {
+            || settings.globalCopyNormalizedEnabled != AppSettings.default.globalCopyNormalizedEnabled
+            || settings.globalCopyJoinedWithSpacesEnabled != AppSettings.default.globalCopyJoinedWithSpacesEnabled {
             mutateSettings { settings in
                 settings.panelShortcut = AppSettings.default.panelShortcut
                 settings.toggleMarkdownPreviewShortcut = AppSettings.default.toggleMarkdownPreviewShortcut
                 settings.globalCopyJoinedEnabled = AppSettings.default.globalCopyJoinedEnabled
                 settings.globalCopyNormalizedEnabled = AppSettings.default.globalCopyNormalizedEnabled
+                settings.globalCopyJoinedWithSpacesEnabled = AppSettings.default.globalCopyJoinedWithSpacesEnabled
                 settings.globalCopyJoinedShortcut = AppSettings.default.globalCopyJoinedShortcut
                 settings.globalCopyNormalizedShortcut = AppSettings.default.globalCopyNormalizedShortcut
+                settings.globalCopyJoinedWithSpacesShortcut = AppSettings.default.globalCopyJoinedWithSpacesShortcut
             }
             saveSettings()
             panelHotKeyShortcut = settings.panelShortcut
@@ -960,6 +1040,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         let clipboardText = NSPasteboard.general.string(forType: .string)
         let noteEditorWindow = noteEditorWindowController?.window
         let standaloneWindow = standaloneNoteWindowController?.window
+        let shellValidationState = windowShellCoordinator.validationState()
         let theme = settings.interfaceTheme
         let pinnedIDs = Set(dataManager.pinnedItems().map(\.id))
         let panelSelectionScope = PanelValidationState.shared.selectionScopeRaw ?? {
@@ -967,9 +1048,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             return pinnedIDs.contains(focusedPanelItem.id) ? "pinned" : "history"
         }()
         let snapshot = ValidationSnapshot(
-            statusItemPresent: statusItem != nil,
-            panelVisible: panel.isVisible,
-            panelFrontmost: isPanelFrontmost(),
+            statusItemPresent: shellValidationState.statusItemPresent,
+            panelVisible: shellValidationState.panelVisible,
+            panelFrontmost: shellValidationState.panelFrontmost,
+            frontmostWindowKind: validationFrontmostWindowKind(shellValidationState).rawValue,
             panelPinnedAreaVisible: panelPinnedAreaVisible,
             panelSelectionScope: panelSelectionScope,
             highlightedPanelItemID: highlightedPanelItem?.id.uuidString,
@@ -1004,8 +1086,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             standaloneNoteWindowTitle: standaloneWindow?.title,
             standaloneNotePreviewVisible: standaloneNoteMarkdownPreviewVisible,
             standaloneNotePreviewWidth: validationCurrentPreviewWebView(in: standaloneWindow).map { Double($0.frame.width) },
-            settingsVisible: settingsWindowController?.window?.isVisible == true,
-            helpVisible: helpPanel?.isVisible == true,
+            settingsVisible: shellValidationState.settingsVisible,
+            helpVisible: shellValidationState.helpVisible,
             interfaceZoomScale: settings.clampedInterfaceZoomScale,
             settingsLanguage: settings.settingsLanguage.rawValue,
             interfaceThemePreset: settings.interfaceThemePreset.rawValue,
@@ -1013,6 +1095,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             toggleMarkdownPreviewShortcutDisplay: HotKeyManager.displayString(for: settings.toggleMarkdownPreviewShortcut),
             globalCopyJoinedEnabled: settings.globalCopyJoinedEnabled,
             globalCopyNormalizedEnabled: settings.globalCopyNormalizedEnabled,
+            globalCopyJoinedWithSpacesEnabled: settings.globalCopyJoinedWithSpacesEnabled,
             selectedFillDiffersFromCardFill: validationResolvedColorDescription(theme.selectedFill) != validationResolvedColorDescription(theme.cardFill),
             previewSelectedText: MarkdownPreviewValidationState.shared.selectedText,
             previewScrollFraction: MarkdownPreviewValidationState.shared.scrollFraction,
@@ -1031,6 +1114,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             try data.write(to: url, options: .atomic)
         } catch {
             fputs("Failed to write validation snapshot: \(error)\n", stderr)
+        }
+    }
+
+    private func validationFrontmostWindowKind(_ shellValidationState: WindowShellValidationState) -> ValidationFrontmostWindowKind {
+        if noteEditorWindowController?.window?.isVisible == true,
+           NSApp.keyWindow == noteEditorWindowController?.window || NSApp.mainWindow == noteEditorWindowController?.window {
+            return .noteEditor
+        }
+        if standaloneNoteWindowController?.window?.isVisible == true,
+           NSApp.keyWindow == standaloneNoteWindowController?.window || NSApp.mainWindow == standaloneNoteWindowController?.window {
+            return .standaloneNote
+        }
+        switch shellValidationState.frontmostWindowKind {
+        case .settings:
+            return .settings
+        case .help:
+            return .help
+        case .panel:
+            return .panel
+        case .none:
+            return .none
+        }
+    }
+
+    private func currentGlobalTransformFrontmostWindowKind(
+        _ shellValidationState: WindowShellValidationState
+    ) -> GlobalTransformFrontmostWindowKind {
+        if noteEditorWindowController?.window?.isVisible == true,
+           NSApp.keyWindow == noteEditorWindowController?.window || NSApp.mainWindow == noteEditorWindowController?.window {
+            return .noteEditor
+        }
+        if standaloneNoteWindowController?.window?.isVisible == true,
+           NSApp.keyWindow == standaloneNoteWindowController?.window || NSApp.mainWindow == standaloneNoteWindowController?.window {
+            return .standaloneNote
+        }
+
+        switch shellValidationState.frontmostWindowKind {
+        case .panel:
+            return .panel
+        case .settings:
+            return .settings
+        case .help:
+            return .help
+        case .none:
+            return .none
         }
     }
 
@@ -1108,18 +1236,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         )
     }
 
+    private func currentValidationEditorSurface() -> ValidationEditorSurfaceKind {
+        let keyOrMainWindow = NSApp.keyWindow ?? NSApp.mainWindow
+        let keyOrMainWindowKind: ValidationEditorSurfaceKind
+
+        if keyOrMainWindow == noteEditorWindowController?.window {
+            keyOrMainWindowKind = .noteEditor
+        } else if keyOrMainWindow == standaloneNoteWindowController?.window {
+            keyOrMainWindowKind = .standaloneNote
+        } else {
+            keyOrMainWindowKind = .none
+        }
+
+        let snapshot = ValidationEditorSurfaceSnapshot(
+            keyOrMainWindowKind: keyOrMainWindowKind,
+            noteEditorVisible: noteEditorWindowController?.window?.isVisible == true,
+            standaloneNoteVisible: standaloneNoteWindowController?.window?.isVisible == true
+        )
+        return ValidationEditorSurfacePolicy.resolve(snapshot)
+    }
+
     private func validationCurrentEditorWindow() -> NSWindow? {
-        if let window = NSApp.keyWindow,
-           window == noteEditorWindowController?.window || window == standaloneNoteWindowController?.window {
-            return window
+        switch currentValidationEditorSurface() {
+        case .noteEditor:
+            return noteEditorWindowController?.window
+        case .standaloneNote:
+            return standaloneNoteWindowController?.window
+        case .none:
+            return nil
         }
-        if let window = noteEditorWindowController?.window, window.isVisible {
-            return window
+    }
+
+    private func validationCurrentEditorSessionID() -> EditorSessionID? {
+        switch currentValidationEditorSurface() {
+        case .noteEditor:
+            return noteEditorSessionID
+        case .standaloneNote:
+            return standaloneNoteSessionID
+        case .none:
+            return nil
         }
-        if let window = standaloneNoteWindowController?.window, window.isVisible {
-            return window
-        }
-        return nil
     }
 
     private func validationCurrentPreviewWebView(in window: NSWindow? = nil) -> WKWebView? {
@@ -1268,6 +1424,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
                 additionalShortcuts: [
                     ("New Note", settings.globalNewNoteShortcut),
                     ("Copy Joined", settings.globalCopyJoinedEnabled ? settings.globalCopyJoinedShortcut : nil),
+                    ("Copy Joined With Spaces", settings.globalCopyJoinedWithSpacesEnabled ? settings.globalCopyJoinedWithSpacesShortcut : nil),
                     ("Copy Normalized", settings.globalCopyNormalizedEnabled ? settings.globalCopyNormalizedShortcut : nil)
                 ]
             )
@@ -1283,11 +1440,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         saveSettings()
     }
 
-    private func validationSetGlobalSpecialCopyEnabled(joined: Bool? = nil, normalized: Bool? = nil) {
+    private func validationSetGlobalSpecialCopyEnabled(
+        joined: Bool? = nil,
+        joinedWithSpaces: Bool? = nil,
+        normalized: Bool? = nil
+    ) {
         let previous = settings
         mutateSettings { settings in
             if let joined {
                 settings.globalCopyJoinedEnabled = joined
+            }
+            if let joinedWithSpaces {
+                settings.globalCopyJoinedWithSpacesEnabled = joinedWithSpaces
             }
             if let normalized {
                 settings.globalCopyNormalizedEnabled = normalized
@@ -1388,12 +1552,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     }
     
     private func setupPanel() {
-        let initialSize = preferredPanelSize()
-        panel = ClipboardPanel(
-            contentRect: NSRect(x: 0, y: 0, width: initialSize.width, height: initialSize.height)
-        )
-        panel.delegate = self
-        panel.contentView = NSHostingView(rootView: makePanelRootView())
+        windowShellCoordinator.setupPanel()
     }
 
     private func makePanelRootView() -> some View {
@@ -1439,57 +1598,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             return
         }
 
-        suppressPanelAutoClose = true
-        launchAutomationAutoCloseSuppressionTask?.cancel()
-        let task = DispatchWorkItem { [weak self] in
-            self?.suppressPanelAutoClose = false
-            self?.launchAutomationAutoCloseSuppressionTask = nil
-        }
-        launchAutomationAutoCloseSuppressionTask = task
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: task)
+        windowShellCoordinator.beginLaunchAutomationSuppression(duration: 2.0)
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
             guard let self else { return }
 
             if arguments.contains(LaunchArgument.openPanelOnLaunch) {
-                self.togglePanel()
+                self.windowShellCoordinator.togglePanel()
             }
 
             if arguments.contains(LaunchArgument.openHelpOnLaunch) {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                    NotificationCenter.default.post(
-                        name: .clipboardHelpRequested,
-                        object: nil,
-                        userInfo: ["isEditingSelectedText": false]
-                    )
+                    self.windowShellCoordinator.showHelpPanel(isEditingSelectedText: false)
                 }
             }
         }
     }
     
     private func setupStatusItem() {
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        if let button = item.button {
-            button.image = NSImage(systemSymbolName: "clipboard", accessibilityDescription: "Clipboard History")
-            button.target = self
-            button.action = #selector(statusItemButtonClicked(_:))
-            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
-        }
-        
-        statusItem = item
-        rebuildStatusMenu()
-        updateStatusItemToolTip()
+        windowShellCoordinator.setupStatusItem()
     }
     
     private func registerHotKeys() {
-        suspendGlobalHotKeys()
-        
+        registerPanelHotKeyIfNeeded()
+        registerNonPanelHotKeysIfNeeded()
+        windowShellCoordinator.refreshStatusItemUI()
+    }
+
+    private func registerPanelHotKeyIfNeeded() {
+        suspendPanelHotKey()
+
+        guard WindowShellPolicy.panelHotKeyRouting(
+            settingsVisible: settingsWindowController?.window?.isVisible == true,
+            settingsShortcutCaptureActive: settingsShortcutCaptureActive
+        ) != .suspendRegistration else {
+            panelHotKeyState = .notRegistered
+            return
+        }
+
         let panelResult = HotKeyManager.shared.registerDetailed(shortcut: panelHotKeyShortcut) { [weak self] in
-            self?.togglePanel()
+            self?.handlePanelHotKey()
         }
         panelHotKeyRegistrationID = panelResult.registrationID
         panelHotKeyState = panelResult.isSuccess ? .registered : .failed(panelResult.status)
-        
+    }
+
+    private func registerNonPanelHotKeysIfNeeded() {
+        suspendNonPanelHotKeys()
+
+        guard settingsWindowController?.window?.isVisible != true else {
+            return
+        }
+
         let translateResult = HotKeyManager.shared.registerDetailed(shortcut: translateHotKeyShortcut) { [weak self] in
             self?.translateCurrentContext()
         }
@@ -1507,69 +1667,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
            let shortcut = settings.globalCopyJoinedShortcut {
             let result = HotKeyManager.shared.registerDetailed(shortcut: shortcut) { [weak self] in
                 guard let self, self.settings.globalCopyJoinedEnabled else { return }
-                if self.currentEditorCommandTargetWindowNumber() != nil {
-                    self.postEditorCommand(.joinLines)
-                    return
-                }
-                if self.panel.isVisible {
-                    NotificationCenter.default.post(
-                        name: .clipboardTransformRequested,
-                        object: nil,
-                        userInfo: ["action": "join"]
-                    )
-                    return
-                }
-                let targetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
-                self.copySelectedTextFromCurrentContext(
+                self.handleGlobalTransformShortcut(
+                    editorCommand: .joinLines,
+                    panelAction: "join",
                     feedbackMessage: "Joined",
-                    targetPID: targetPID,
-                    transform: joinLinesText
+                    transform: { [weak self] text in
+                        guard let self else { return text }
+                        return joinLinesText(text, strategy: self.settings.joinLineBreakStrategy)
+                    }
                 )
             }
             globalCopyJoinedHotKeyRegistrationID = result.registrationID
+        }
+
+        if settings.globalCopyJoinedWithSpacesEnabled,
+           let shortcut = settings.globalCopyJoinedWithSpacesShortcut {
+            let result = HotKeyManager.shared.registerDetailed(shortcut: shortcut) { [weak self] in
+                guard let self, self.settings.globalCopyJoinedWithSpacesEnabled else { return }
+                self.handleGlobalTransformShortcut(
+                    editorCommand: .joinLinesWithSpaces,
+                    panelAction: "joinWithSpaces",
+                    feedbackMessage: "Joined with spaces",
+                    transform: { text in
+                        joinLinesText(text, strategy: .replaceWithSpace)
+                    }
+                )
+            }
+            globalCopyJoinedWithSpacesHotKeyRegistrationID = result.registrationID
         }
 
         if settings.globalCopyNormalizedEnabled,
            let shortcut = settings.globalCopyNormalizedShortcut {
             let result = HotKeyManager.shared.registerDetailed(shortcut: shortcut) { [weak self] in
                 guard let self, self.settings.globalCopyNormalizedEnabled else { return }
-                if self.currentEditorCommandTargetWindowNumber() != nil {
-                    self.postEditorCommand(.normalizeForCommand)
-                    return
-                }
-                if self.panel.isVisible {
-                    NotificationCenter.default.post(
-                        name: .clipboardTransformRequested,
-                        object: nil,
-                        userInfo: ["action": "normalize"]
-                    )
-                    return
-                }
-                let targetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
-                self.copySelectedTextFromCurrentContext(
+                self.handleGlobalTransformShortcut(
+                    editorCommand: .normalizeForCommand,
+                    panelAction: "normalize",
                     feedbackMessage: "Normalized",
-                    targetPID: targetPID,
                     transform: normalizeCommandText
                 )
             }
             globalCopyNormalizedHotKeyRegistrationID = result.registrationID
         }
-        
-        updateStatusItemToolTip()
-        rebuildStatusMenu()
     }
 
     private func suspendGlobalHotKeys() {
+        suspendPanelHotKey()
+        suspendNonPanelHotKeys()
+    }
+
+    private func suspendPanelHotKey() {
         if let id = panelHotKeyRegistrationID {
             HotKeyManager.shared.unregister(registrationID: id)
             panelHotKeyRegistrationID = nil
-            panelHotKeyState = .notRegistered
         }
+        panelHotKeyState = .notRegistered
+    }
+
+    private func suspendNonPanelHotKeys() {
         if let id = translateHotKeyRegistrationID {
             HotKeyManager.shared.unregister(registrationID: id)
             translateHotKeyRegistrationID = nil
-            translationHotKeyState = .notRegistered
         }
+        translationHotKeyState = .notRegistered
         if let id = globalNewNoteHotKeyRegistrationID {
             HotKeyManager.shared.unregister(registrationID: id)
             globalNewNoteHotKeyRegistrationID = nil
@@ -1578,139 +1738,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             HotKeyManager.shared.unregister(registrationID: id)
             globalCopyJoinedHotKeyRegistrationID = nil
         }
+        if let id = globalCopyJoinedWithSpacesHotKeyRegistrationID {
+            HotKeyManager.shared.unregister(registrationID: id)
+            globalCopyJoinedWithSpacesHotKeyRegistrationID = nil
+        }
         if let id = globalCopyNormalizedHotKeyRegistrationID {
             HotKeyManager.shared.unregister(registrationID: id)
             globalCopyNormalizedHotKeyRegistrationID = nil
         }
     }
-    
-    private func updateStatusItemToolTip() {
-        guard let button = statusItem?.button else { return }
-        let panelShortcutLabel = HotKeyManager.displayString(for: panelHotKeyShortcut)
-        let translateShortcutLabel = HotKeyManager.displayString(for: translateHotKeyShortcut)
-        button.toolTip = "Clipboard History (\(panelShortcutLabel)) / Translate (\(translateShortcutLabel))"
-    }
-    
-    private func rebuildStatusMenu() {
-        statusMenu.removeAllItems()
-        
-        let toggleItem = NSMenuItem(
-            title: "Show / Hide Clipboard History",
-            action: #selector(togglePanelFromMenu),
-            keyEquivalent: ""
-        )
-        toggleItem.tag = MenuTag.togglePanel.rawValue
-        toggleItem.target = self
-        statusMenu.addItem(toggleItem)
 
-        let newNoteItem = NSMenuItem(
-            title: "New Note (\(HotKeyManager.displayString(for: settings.newNoteShortcut)))",
-            action: #selector(createNewNoteFromMenu),
-            keyEquivalent: ""
-        )
-        newNoteItem.tag = MenuTag.newNote.rawValue
-        newNoteItem.target = self
-        statusMenu.addItem(newNoteItem)
-
-        let openFileItem = NSMenuItem(
-            title: "Open File…",
-            action: #selector(openFileFromMenu),
-            keyEquivalent: ""
-        )
-        openFileItem.tag = MenuTag.openFile.rawValue
-        openFileItem.target = self
-        statusMenu.addItem(openFileItem)
-
-        statusMenu.addItem(.separator())
-        
-        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettingsFromMenu), keyEquivalent: ",")
-        settingsItem.tag = MenuTag.openSettings.rawValue
-        settingsItem.target = self
-        statusMenu.addItem(settingsItem)
-        
-        statusMenu.addItem(.separator())
-        
-        let quitItem = NSMenuItem(title: "Quit Clipboard History", action: #selector(quitFromMenu), keyEquivalent: "q")
-        quitItem.tag = MenuTag.quit.rawValue
-        quitItem.target = self
-        statusMenu.addItem(quitItem)
-    }
-    
-    private func showStatusMenu(using event: NSEvent) {
-        guard let button = statusItem?.button else { return }
-        rebuildStatusMenu()
-        NSMenu.popUpContextMenu(statusMenu, with: event, for: button)
+    private func handlePanelHotKey() {
+        windowShellCoordinator.handlePanelHotKey()
     }
     
     private func showPanel() {
-        temporarilySuppressPanelAutoClose(for: 0.45)
-        if NSApp.isActive,
-           let activeWindow = NSApp.keyWindow ?? NSApp.mainWindow,
-           activeWindow != panel,
-           activeWindow.isVisible {
-            panelReturnWindow = activeWindow
-        } else {
-            panelReturnWindow = nil
-        }
-        let targetApp = preferredPlacementTargetApp() ?? currentPlacementTargetApp()
-        if let targetApp, targetApp != NSRunningApplication.current {
-            previouslyActiveApp = targetApp
-            placementTargetApp = targetApp
-        }
-        let presentationContext = panelPresentationContext()
-        NotificationCenter.default.post(
-            name: .clipboardPanelWillOpen,
-            object: nil,
-            userInfo: [
-                "targetAppName": previouslyActiveApp?.localizedName ?? "",
-                "targetArrowSymbol": presentationContext.targetArrowSymbol
-            ]
-        )
-        if showsAnchorDebugMarkers, let anchorPoint = presentationContext.anchorPoint {
-            showAnchorDebugMarkers(
-                presentationContext.anchorDebugCandidates,
-                fallbackPoint: anchorPoint,
-                description: presentationContext.anchorDescription ?? ""
-            )
-        }
-        NSApp.setActivationPolicy(.regular)
-        panel.alphaValue = 1
-        panel.setFrame(presentationContext.finalFrame, display: true)
-        panel.orderFrontRegardless()
-        panel.makeKeyAndOrderFront(nil)
-        activateCurrentApp(unhideAllWindows: false)
-        DispatchQueue.main.async { [weak self] in
-            self?.panel.orderFrontRegardless()
-            self?.panel.makeKeyAndOrderFront(nil)
-        }
-        hasPresentedPanelThisLaunch = true
-        DispatchQueue.main.async { [weak self] in
-            self?.clipboardController.syncNow()
-        }
-    }
-
-    private func temporarilySuppressPanelAutoClose(for duration: TimeInterval) {
-        suppressPanelAutoClose = true
-        panelAutoCloseSuppressionTask?.cancel()
-        let task = DispatchWorkItem { [weak self] in
-            self?.suppressPanelAutoClose = false
-            self?.panelAutoCloseSuppressionTask = nil
-        }
-        panelAutoCloseSuppressionTask = task
-        DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: task)
+        windowShellCoordinator.showPanel()
     }
 
     private func togglePanel() {
-        if Self.panelToggleAction(isVisible: panel.isVisible, isFrontmost: isPanelFrontmost()) == .close {
-            closePanelAndReactivate()
-            return
-        }
-
-        showPanel()
+        windowShellCoordinator.togglePanel()
     }
     
     private func isPanelFrontmost() -> Bool {
-        panel.isVisible && NSApp.isActive && panel.isKeyWindow
+        windowShellCoordinator.isPanelFrontmost()
     }
     
     private func panelPresentationContext() -> PanelPresentationContext {
@@ -1813,30 +1864,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     }
 
     func windowDidEndLiveResize(_ notification: Notification) {
-        guard let window = notification.object as? NSWindow, window == panel else {
-            return
-        }
-        persistPanelSize(window.frame.size)
-    }
-
-    func windowDidResignKey(_ notification: Notification) {
-        guard let window = notification.object as? NSWindow else {
-            return
-        }
-        if window == helpPanel {
-            closeHelpPanel(refocusClipboardPanel: false)
-            return
-        }
-        guard window == panel, panel.isVisible else {
-            return
-        }
-        if helpPanel?.isVisible == true {
-            return
-        }
-        if suppressPanelAutoClose || settingsWindowController?.window?.isVisible == true {
-            return
-        }
-        closePanelAndReactivate()
+        windowShellCoordinator.windowDidEndLiveResize(notification)
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -1901,6 +1929,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         }
 
         let targetApp = currentPlacementTargetApp()
+        capturePasteTargetSnapshot(for: targetApp)
         previouslyActiveApp = targetApp
         placementTargetApp = targetApp
 
@@ -1927,77 +1956,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     }
 
     private func observeHelpRequests() {
-        guard helpRequestObserver == nil else { return }
-        helpRequestObserver = NotificationCenter.default.addObserver(
-            forName: .clipboardHelpRequested,
-            object: nil,
-            queue: .main
-        ) { [weak self] notification in
-            let isEditingSelectedText = notification.userInfo?["isEditingSelectedText"] as? Bool ?? false
-            self?.toggleHelpPanel(isEditingSelectedText: isEditingSelectedText)
-        }
+        windowShellCoordinator.observeHelpRequestsIfNeeded()
     }
 
     private func toggleHelpPanel(isEditingSelectedText: Bool) {
-        if helpPanel?.isVisible == true {
-            closeHelpPanel(refocusClipboardPanel: true)
-            return
-        }
-        showHelpPanel(isEditingSelectedText: isEditingSelectedText)
+        windowShellCoordinator.toggleHelpPanel(isEditingSelectedText: isEditingSelectedText)
     }
 
     private func showHelpPanel(isEditingSelectedText: Bool) {
-        let panel = helpPanel ?? makeHelpPanel()
-        let panelWasVisible = self.panel.isVisible
-        suppressPanelAutoClose = panelWasVisible
-        let targetFrame = helpPanelFrame(for: panel)
-        if let hostingController = panel.contentViewController as? NSHostingController<ClipboardHelpPanelContent> {
-            hostingController.rootView = ClipboardHelpPanelContent(
-                settings: settings,
-                isEditingSelectedText: isEditingSelectedText,
-                onClose: { [weak self] in
-                    self?.closeHelpPanel(refocusClipboardPanel: true)
-                }
-            )
-        }
-        panel.setFrame(targetFrame, display: true)
-        if panel.parent != self.panel {
-            self.panel.addChildWindow(panel, ordered: .above)
-        }
-        panel.orderFrontRegardless()
-        panel.makeKeyAndOrderFront(nil)
-        helpPanel = panel
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-            self?.suppressPanelAutoClose = false
-        }
-    }
-
-    private func makeHelpPanel() -> NSPanel {
-        let hostingController = NSHostingController(
-            rootView: ClipboardHelpPanelContent(
-                settings: settings,
-                isEditingSelectedText: false,
-                onClose: { [weak self] in
-                    self?.closeHelpPanel(refocusClipboardPanel: true)
-                }
-            )
-        )
-
-        let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 400, height: 440),
-            styleMask: [.titled, .closable, .fullSizeContentView],
-            backing: .buffered,
-            defer: false
-        )
-        panel.title = "Keyboard Help"
-        panel.isReleasedWhenClosed = false
-        panel.isFloatingPanel = true
-        panel.level = .floating
-        panel.hidesOnDeactivate = true
-        panel.collectionBehavior = [.moveToActiveSpace]
-        panel.delegate = self
-        panel.contentViewController = hostingController
-        return panel
+        windowShellCoordinator.showHelpPanel(isEditingSelectedText: isEditingSelectedText)
     }
 
     private func helpPanelFrame(for helpPanel: NSPanel) -> NSRect {
@@ -2005,7 +1972,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         let visibleFrame = (screen?.visibleFrame ?? panel.frame).insetBy(dx: Layout.screenMargin, dy: Layout.screenMargin)
         let desiredWidth = min(420, max(320, visibleFrame.width - 40))
         let desiredHeight = min(520, max(280, visibleFrame.height - 40))
-        return Self.helpPanelPlacement(
+        return WindowShellPolicy.helpPanelPlacement(
             for: panel.frame,
             within: visibleFrame,
             helpSize: NSSize(width: desiredWidth, height: desiredHeight),
@@ -2013,110 +1980,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         ).frame
     }
 
-    static func helpPanelPlacement(
-        for panelFrame: NSRect,
-        within visibleFrame: NSRect,
-        helpSize: NSSize,
-        gap: CGFloat
-    ) -> HelpPanelPlacement {
-        let alignedY = min(
-            max(panelFrame.maxY - helpSize.height, visibleFrame.minY),
-            visibleFrame.maxY - helpSize.height
-        )
-
-        let rightX = panelFrame.maxX + gap
-        if rightX + helpSize.width <= visibleFrame.maxX {
-            return HelpPanelPlacement(
-                frame: clampedAuxiliaryFrame(
-                    NSRect(x: rightX, y: alignedY, width: helpSize.width, height: helpSize.height),
-                    within: visibleFrame
-                ),
-                side: .right
-            )
-        }
-
-        let leftX = panelFrame.minX - gap - helpSize.width
-        if leftX >= visibleFrame.minX {
-            return HelpPanelPlacement(
-                frame: clampedAuxiliaryFrame(
-                    NSRect(x: leftX, y: alignedY, width: helpSize.width, height: helpSize.height),
-                    within: visibleFrame
-                ),
-                side: .left
-            )
-        }
-
-        return HelpPanelPlacement(
-            frame: clampedAuxiliaryFrame(
-                NSRect(
-                    x: visibleFrame.midX - (helpSize.width / 2),
-                    y: visibleFrame.midY - (helpSize.height / 2),
-                    width: helpSize.width,
-                    height: helpSize.height
-                ),
-                within: visibleFrame
-            ),
-            side: .centered
-        )
-    }
-
-    static func auxiliaryWindowPlacement(
-        anchorFrame: NSRect,
-        visibleFrame: NSRect,
-        windowSize: NSSize,
-        gap: CGFloat
-    ) -> NSRect {
-        let alignedY = min(
-            max(anchorFrame.maxY - windowSize.height, visibleFrame.minY),
-            visibleFrame.maxY - windowSize.height
-        )
-
-        let rightFrame = NSRect(
-            x: anchorFrame.maxX + gap,
-            y: alignedY,
-            width: windowSize.width,
-            height: windowSize.height
-        )
-        if rightFrame.maxX <= visibleFrame.maxX {
-            return clampedAuxiliaryFrame(rightFrame, within: visibleFrame)
-        }
-
-        let leftFrame = NSRect(
-            x: anchorFrame.minX - gap - windowSize.width,
-            y: alignedY,
-            width: windowSize.width,
-            height: windowSize.height
-        )
-        if leftFrame.minX >= visibleFrame.minX {
-            return clampedAuxiliaryFrame(leftFrame, within: visibleFrame)
-        }
-
-        return clampedAuxiliaryFrame(
-            NSRect(
-                x: visibleFrame.midX - (windowSize.width / 2),
-                y: visibleFrame.midY - (windowSize.height / 2),
-                width: windowSize.width,
-                height: windowSize.height
-            ),
-            within: visibleFrame
-        )
-    }
-
-    static func clampedAuxiliaryFrame(_ frame: NSRect, within visibleFrame: NSRect) -> NSRect {
-        let width = min(frame.width, visibleFrame.width)
-        let height = min(frame.height, visibleFrame.height)
-        let x = min(max(frame.origin.x, visibleFrame.minX), visibleFrame.maxX - width)
-        let y = min(max(frame.origin.y, visibleFrame.minY), visibleFrame.maxY - height)
-        return NSRect(x: x, y: y, width: width, height: height)
-    }
-
     private func closeHelpPanel(refocusClipboardPanel: Bool) {
-        guard let helpPanel else { return }
-        panel.removeChildWindow(helpPanel)
-        helpPanel.orderOut(nil)
-        if refocusClipboardPanel, panel.isVisible {
-            panel.makeKeyAndOrderFront(nil)
-        }
+        windowShellCoordinator.closeHelpPanel(refocusClipboardPanel: refocusClipboardPanel)
     }
 
     private func reactivatePreviouslyActiveApp() {
@@ -2186,22 +2051,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
 
     func pasteTextToFrontApp(_ text: String) {
         copyTextToClipboard(text, feedbackMessage: "Copied")
-        let targetApp = resolvedPasteTargetApp()
 
         if panel.isVisible {
             closePanelAndReactivate()
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-            if let targetApp {
-                self.activateTargetApp(targetApp)
-            } else {
-                self.reactivatePreviouslyActiveApp()
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-                PasteSynthesizer.simulateCmdV()
-            }
-        }
+        schedulePasteToResolvedTarget(initialDelay: 0.12)
     }
 
     private func copySelectedTextFromCurrentContext(
@@ -2243,18 +2098,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         }
 
         copyToClipboard(item)
-        let targetApp = resolvedPasteTargetApp()
-
         closePanelAndReactivate()
+        schedulePasteToResolvedTarget(initialDelay: 0.15)
+    }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+    private func schedulePasteToResolvedTarget(initialDelay: TimeInterval) {
+        let targetApp = resolvedPasteTargetApp()
+        let snapshot = resolvedPasteTargetSnapshot()
+        let targetPID = snapshot?.targetAppPID ?? targetApp?.processIdentifier
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + initialDelay) {
             if let targetApp {
                 self.activateTargetApp(targetApp)
             } else {
                 self.reactivatePreviouslyActiveApp()
             }
+
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-                PasteSynthesizer.simulateCmdV()
+                if let snapshot {
+                    _ = self.restorePasteTargetState(snapshot)
+                }
+
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    PasteSynthesizer.simulateCmdV(targetPID: targetPID)
+                }
             }
         }
     }
@@ -2304,47 +2171,73 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         }
     }
 
-    private func currentEditorCommandTargetWindowNumber() -> Int? {
-        guard let keyWindow = NSApp.keyWindow else {
-            if let window = noteEditorWindowController?.window, window.isVisible {
-                return window.windowNumber
-            }
-            if let window = standaloneNoteWindowController?.window, window.isVisible {
-                return window.windowNumber
-            }
+    private func handleGlobalTransformShortcut(
+        editorCommand: EditorCommand,
+        panelAction: String,
+        feedbackMessage: String,
+        transform: @escaping (String) -> String
+    ) {
+        switch currentGlobalTransformRoute() {
+        case let .editor(sessionID):
+            _ = editorCommandDispatcher.dispatch(editorCommand, to: sessionID)
+        case .panel:
+            NotificationCenter.default.post(
+                name: .clipboardTransformRequested,
+                object: nil,
+                userInfo: ["action": panelAction]
+            )
+        case let .externalSelection(targetPID):
+            copySelectedTextFromCurrentContext(
+                feedbackMessage: feedbackMessage,
+                targetPID: targetPID,
+                transform: transform
+            )
+        }
+    }
+
+    private func currentGlobalTransformRoute() -> GlobalTransformRoute {
+        let shellValidationState = windowShellCoordinator.validationState()
+        let frontmostWindowKind = currentGlobalTransformFrontmostWindowKind(shellValidationState)
+        let activeEditorSessionID: EditorSessionID?
+
+        switch frontmostWindowKind {
+        case .noteEditor:
+            activeEditorSessionID = noteEditorSessionID
+        case .standaloneNote:
+            activeEditorSessionID = standaloneNoteSessionID
+        case .panel, .settings, .help, .none:
+            activeEditorSessionID = nil
+        }
+
+        let snapshot = GlobalTransformRoutingSnapshot(
+            appIsActive: NSApp.isActive,
+            frontmostWindowKind: frontmostWindowKind,
+            activeEditorSessionID: activeEditorSessionID,
+            frontmostExternalPID: frontmostExternalProcessIdentifier()
+        )
+        return GlobalTransformRoutingPolicy.resolve(snapshot)
+    }
+
+    private func frontmostExternalProcessIdentifier() -> pid_t? {
+        guard let frontmostApp = NSWorkspace.shared.frontmostApplication,
+              frontmostApp.processIdentifier != NSRunningApplication.current.processIdentifier else {
             return nil
         }
-        if keyWindow == standaloneNoteWindowController?.window || keyWindow == noteEditorWindowController?.window {
-            return keyWindow.windowNumber
-        }
-        if let window = noteEditorWindowController?.window, window.isVisible {
-            return window.windowNumber
-        }
-        if let window = standaloneNoteWindowController?.window, window.isVisible {
-            return window.windowNumber
-        }
-        return nil
+        return frontmostApp.processIdentifier
     }
 
     private func postEditorCommand(_ command: EditorCommand, text: String? = nil) {
-        var userInfo: [String: Any] = ["command": command.rawValue]
-        if let targetWindowNumber = currentEditorCommandTargetWindowNumber() {
-            userInfo["targetWindowNumber"] = targetWindowNumber
+        guard let sessionID = validationCurrentEditorSessionID() else {
+            return
         }
-        if let text {
-            userInfo["text"] = text
-        }
-        NotificationCenter.default.post(
-            name: .editorCommandRequested,
-            object: nil,
-            userInfo: userInfo
-        )
+        _ = editorCommandDispatcher.dispatch(command, to: sessionID, payloadText: text)
     }
 
     @discardableResult
     private func validationSaveCurrentEditorToFile(_ destinationURL: URL) -> Bool {
         let standardizedDestinationURL = destinationURL.standardizedFileURL
-        if standaloneNoteWindowController?.window?.isVisible == true {
+        switch currentValidationEditorSurface() {
+        case .standaloneNote:
             let draftText = standaloneNoteDraftText
             let destinationKind = inferredFileBackedDocumentKind(for: standardizedDestinationURL)
             let preservedFrame = standaloneNoteWindowController?.window?.frame
@@ -2360,51 +2253,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
                 preferredFrame: preservedFrame
             )
             return true
-        }
-
-        guard noteEditorWindowController?.window?.isVisible == true else {
-            return false
-        }
-
-        let destinationKind = inferredFileBackedDocumentKind(
-            for: standardizedDestinationURL,
-            preferredKind: currentFileBackedDocumentKind
-        )
-        guard saveExternalEditorText(noteEditorDraftText, to: standardizedDestinationURL) else {
-            return false
-        }
-
-        if !isCurrentExternalEditorCodex {
-            if Self.shouldConvertManualNoteToFileBackedEditor(
-                currentMode: noteEditorExternalMode,
-                itemIDPresent: noteEditorItemID != nil
-            ) {
-                convertCurrentManualNoteEditorToFileBacked(
-                    fileURL: standardizedDestinationURL,
-                    kind: destinationKind
-                )
-            } else {
-                noteEditorExternalFileURL = standardizedDestinationURL
-                noteEditorExternalMode = Self.standaloneEditorModeAfterSavingFile(
-                    currentMode: noteEditorExternalMode,
-                    destinationKind: destinationKind
-                )
-                syncStandaloneNoteItemWithSavedFileTextIfNeeded(noteEditorDraftText)
-                markCurrentNoteEditorSaved(text: noteEditorDraftText, destination: .file)
-                noteEditorObservedFileModificationDate = fileModificationDate(for: standardizedDestinationURL)
-                noteEditorObservedFileContentSnapshot = noteEditorDraftText
-                noteEditorWindowController?.window?.representedURL = standardizedDestinationURL
-                noteEditorWindowController?.window?.title = externalEditorWindowTitle(
-                    for: standardizedDestinationURL,
-                    kind: currentFileBackedDocumentKind,
-                    isOrphaned: false,
-                    codexContext: nil
-                )
-                fileLocalHistoryManager?.registerOpenedFile(standardizedDestinationURL)
-                startExternalFileMonitorIfNeeded()
+        case .noteEditor:
+            let destinationKind = inferredFileBackedDocumentKind(
+                for: standardizedDestinationURL,
+                preferredKind: currentFileBackedDocumentKind
+            )
+            guard saveExternalEditorText(noteEditorDraftText, to: standardizedDestinationURL) else {
+                return false
             }
+
+            if !isCurrentExternalEditorCodex {
+                if Self.shouldConvertManualNoteToFileBackedEditor(
+                    currentMode: noteEditorExternalMode,
+                    itemIDPresent: noteEditorItemID != nil
+                ) {
+                    convertCurrentManualNoteEditorToFileBacked(
+                        fileURL: standardizedDestinationURL,
+                        kind: destinationKind
+                    )
+                } else {
+                    noteEditorExternalFileURL = standardizedDestinationURL
+                    noteEditorExternalMode = Self.standaloneEditorModeAfterSavingFile(
+                        currentMode: noteEditorExternalMode,
+                        destinationKind: destinationKind
+                    )
+                    syncStandaloneNoteItemWithSavedFileTextIfNeeded(noteEditorDraftText)
+                    markCurrentNoteEditorSaved(text: noteEditorDraftText, destination: .file)
+                    noteEditorObservedFileModificationDate = fileModificationDate(for: standardizedDestinationURL)
+                    noteEditorObservedFileContentSnapshot = noteEditorDraftText
+                    noteEditorWindowController?.window?.representedURL = standardizedDestinationURL
+                    noteEditorWindowController?.window?.title = externalEditorWindowTitle(
+                        for: standardizedDestinationURL,
+                        kind: currentFileBackedDocumentKind,
+                        isOrphaned: false,
+                        codexContext: nil
+                    )
+                    fileLocalHistoryManager?.registerOpenedFile(standardizedDestinationURL)
+                    startExternalFileMonitorIfNeeded()
+                }
+            }
+            return true
+        case .none:
+            return false
         }
-        return true
     }
 
     private func respondToValidationAttachedSheet(choice rawChoice: String) {
@@ -2545,7 +2436,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         guard let app = NSWorkspace.shared.frontmostApplication else {
             return nil
         }
-
         return AXUIElementCreateApplication(app.processIdentifier)
     }
 
@@ -2687,10 +2577,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         return uiElementAttribute(kAXFocusedWindowAttribute as CFString, of: systemWideElement)
     }
 
+    private func capturePasteTargetSnapshot(for targetApp: NSRunningApplication?) {
+        pasteTargetSnapshot = pasteTargetingService.captureSnapshot(for: targetApp)
+    }
+
+    private func resolvedPasteTargetSnapshot() -> PasteTargetSnapshot? {
+        pasteTargetingService.resolvedSnapshot(from: pasteTargetSnapshot)
+    }
+
+    private func restorePasteTargetState(_ snapshot: PasteTargetSnapshot) -> Bool {
+        pasteTargetingService.restoreState(snapshot)
+    }
+
     private func preferredPlacementTargetApp() -> NSRunningApplication? {
         let currentApp = NSRunningApplication.current
         let frontmostApp = NSWorkspace.shared.frontmostApplication
-        let decision = TargetAppDecision(
+        let decision = PlacementTargetDecision(
             frontmostPID: frontmostApp?.processIdentifier,
             placementPID: placementTargetApp?.processIdentifier,
             previousPID: previouslyActiveApp?.processIdentifier,
@@ -2700,7 +2602,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             previousTerminated: previouslyActiveApp?.isTerminated ?? true
         )
 
-        let targetPID = Self.preferredTargetPID(for: decision)
+        let targetPID = PasteTargetingService.preferredPlacementTargetPID(for: decision)
         if targetPID == frontmostApp?.processIdentifier {
             return frontmostApp
         }
@@ -2725,19 +2627,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     }
 
     private func resolvedPasteTargetApp() -> NSRunningApplication? {
-        if let previous = previouslyActiveApp,
-           previous != NSRunningApplication.current,
-           !previous.isTerminated {
-            return previous
-        }
-
-        if let placement = placementTargetApp,
-           placement != NSRunningApplication.current,
-           !placement.isTerminated {
-            return placement
-        }
-
-        return currentPlacementTargetApp()
+        pasteTargetingService.resolvedTargetApp(
+            snapshot: pasteTargetSnapshot,
+            previousApp: previouslyActiveApp,
+            placementApp: placementTargetApp,
+            fallbackApp: currentPlacementTargetApp()
+        )
     }
 
     private func frontmostWindowOwnerApp() -> NSRunningApplication? {
@@ -3464,6 +3359,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         ].compactMap { $0 }
         let enabledGlobalCopyShortcuts = [
             draft.globalCopyJoinedEnabled ? draft.globalCopyJoinedShortcut : nil,
+            draft.globalCopyJoinedWithSpacesEnabled ? draft.globalCopyJoinedWithSpacesShortcut : nil,
             draft.globalCopyNormalizedEnabled ? draft.globalCopyNormalizedShortcut : nil
         ].compactMap { $0 }
         let globalShortcuts = baseGlobalShortcuts + enabledGlobalCopyShortcuts
@@ -3476,6 +3372,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             draft.undoShortcut,
             draft.redoShortcut,
             draft.copyJoinedShortcut,
+            draft.copyJoinedWithSpacesShortcut,
             draft.copyNormalizedShortcut
         ]
         let editorShortcuts = [
@@ -3486,6 +3383,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             draft.moveLineDownShortcut,
             draft.toggleMarkdownPreviewShortcut,
             draft.joinLinesShortcut,
+            draft.joinLinesWithSpacesShortcut,
             draft.normalizeForCommandShortcut
         ]
         let codexShortcuts = [
@@ -3503,6 +3401,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         let localIdentifiers = Set(localShortcuts.map { "\($0.keyCode):\($0.modifiers)" })
         let exemptGlobalIdentifiers = Set([
             draft.globalCopyJoinedEnabled ? draft.globalCopyJoinedShortcut : nil,
+            draft.globalCopyJoinedWithSpacesEnabled ? draft.globalCopyJoinedWithSpacesShortcut : nil,
             draft.globalCopyNormalizedEnabled ? draft.globalCopyNormalizedShortcut : nil
         ].compactMap { $0 }.map { "\($0.keyCode):\($0.modifiers)" })
 
@@ -3523,6 +3422,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             additionalShortcuts: [
                 ("New Note", draft.globalNewNoteShortcut),
                 ("Copy Joined", draft.globalCopyJoinedEnabled ? draft.globalCopyJoinedShortcut : nil),
+                ("Copy Joined With Spaces", draft.globalCopyJoinedWithSpacesEnabled ? draft.globalCopyJoinedWithSpacesShortcut : nil),
                 ("Copy Normalized", draft.globalCopyNormalizedEnabled ? draft.globalCopyNormalizedShortcut : nil)
             ]
         )
@@ -3544,8 +3444,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             settings.globalNewNoteShortcut = draft.globalNewNoteShortcut
             settings.globalCopyJoinedShortcut = draft.globalCopyJoinedShortcut
             settings.globalCopyNormalizedShortcut = draft.globalCopyNormalizedShortcut
+            settings.globalCopyJoinedWithSpacesShortcut = draft.globalCopyJoinedWithSpacesShortcut
             settings.globalCopyJoinedEnabled = draft.globalCopyJoinedEnabled
             settings.globalCopyNormalizedEnabled = draft.globalCopyNormalizedEnabled
+            settings.globalCopyJoinedWithSpacesEnabled = draft.globalCopyJoinedWithSpacesEnabled
             settings.newNoteShortcut = draft.newNoteShortcut
             settings.togglePinShortcut = draft.togglePinShortcut
             settings.togglePinnedAreaShortcut = draft.togglePinnedAreaShortcut
@@ -3560,10 +3462,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             settings.moveLineDownShortcut = draft.moveLineDownShortcut
             settings.copyJoinedShortcut = draft.copyJoinedShortcut
             settings.copyNormalizedShortcut = draft.copyNormalizedShortcut
+            settings.copyJoinedWithSpacesShortcut = draft.copyJoinedWithSpacesShortcut
             settings.toggleMarkdownPreviewShortcut = draft.toggleMarkdownPreviewShortcut
             settings.joinLinesShortcut = draft.joinLinesShortcut
+            settings.joinLinesWithSpacesShortcut = draft.joinLinesWithSpacesShortcut
             settings.normalizeForCommandShortcut = draft.normalizeForCommandShortcut
             settings.orphanCodexDiscardShortcut = draft.orphanCodexDiscardShortcut
+            settings.joinLineBreakStrategy = draft.joinLineBreakStrategy
             settings.interfaceZoomScale = draft.clampedInterfaceZoomScale
             settings.newNoteReopenBehavior = draft.newNoteReopenBehavior
             settings.interfaceThemePreset = draft.interfaceThemePreset
@@ -3692,6 +3597,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         if standaloneNoteWasVisible, let itemID = standaloneItemID {
             standaloneNoteWindowController?.window?.orderOut(nil)
             standaloneNoteWindowController = nil
+            standaloneNoteSessionID = nil
             standaloneNoteItemID = itemID
             standaloneNoteDraftText = standaloneDraft
             let controller = makeNoteEditorWindowController(
@@ -3709,6 +3615,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         if noteWasVisible, let itemID = noteItemID {
             noteEditorWindowController?.window?.orderOut(nil)
             noteEditorWindowController = nil
+            noteEditorSessionID = nil
             noteEditorItemID = itemID
             noteEditorDraftText = noteDraft
             let controller = makeNoteEditorWindowController(
@@ -3721,6 +3628,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         } else if noteWasVisible, noteExternalMode?.fileKind != nil || noteExternalFileURL != nil {
             noteEditorWindowController?.window?.orderOut(nil)
             noteEditorWindowController = nil
+            noteEditorSessionID = nil
             let controller: NSWindowController
             if let fileKind = noteExternalMode?.fileKind {
                 controller = makeFileBackedEditorWindowController(
@@ -3764,10 +3672,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             if helpWasVisible {
                 self.showHelpPanel(isEditingSelectedText: false)
             }
-            if settingsWasVisible {
-                self.settingsWindowController?.showWindow(nil)
-                self.settingsWindowController?.window?.makeKeyAndOrderFront(nil)
-            }
             if standaloneNoteWasVisible {
                 self.standaloneNoteWindowController?.showWindow(nil)
                 self.standaloneNoteWindowController?.window?.orderFront(nil)
@@ -3777,6 +3681,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
                 self.noteEditorWindowController?.showWindow(nil)
                 self.noteEditorWindowController?.window?.orderFront(nil)
                 self.noteEditorWindowController?.window?.makeKeyAndOrderFront(nil)
+            }
+            if settingsWasVisible {
+                self.settingsWindowController?.showWindow(nil)
+                self.settingsWindowController?.window?.orderFrontRegardless()
+                self.settingsWindowController?.window?.makeKeyAndOrderFront(nil)
             }
         }
     }
@@ -3862,40 +3771,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     }
 
     func openSettingsWindow() {
-        let panelWasVisible = panel.isVisible
-        suppressPanelAutoClose = panelWasVisible
-        suspendGlobalHotKeys()
-        NSApp.activate(ignoringOtherApps: true)
-        let controller = makeSettingsWindowController()
-        if let window = controller.window {
-            let desiredFrame: NSRect
-            if panelWasVisible {
-                let screen = screen(containing: panel.frame) ?? panel.screen ?? NSScreen.main
-                let visibleFrame = (screen?.visibleFrame ?? window.frame).insetBy(dx: Layout.screenMargin, dy: Layout.screenMargin)
-                desiredFrame = Self.auxiliaryWindowPlacement(
-                    anchorFrame: panel.frame,
-                    visibleFrame: visibleFrame,
-                    windowSize: window.frame.size,
-                    gap: 16
-                )
-            } else {
-                let screen = NSScreen.main
-                let visibleFrame = (screen?.visibleFrame ?? window.frame).insetBy(dx: Layout.screenMargin, dy: Layout.screenMargin)
-                desiredFrame = NSRect(
-                    x: visibleFrame.midX - (window.frame.width / 2),
-                    y: visibleFrame.midY - (window.frame.height / 2),
-                    width: window.frame.width,
-                    height: window.frame.height
-                )
-            }
-            window.setFrame(desiredFrame, display: false)
+        windowShellCoordinator.openSettingsWindow()
+    }
+
+    func bringSettingsWindowToFront() {
+        windowShellCoordinator.bringSettingsWindowToFront()
+    }
+
+    func setSettingsShortcutCaptureActive(_ isActive: Bool) {
+        guard settingsShortcutCaptureActive != isActive else {
+            return
         }
-        controller.showWindow(nil)
-        controller.window?.orderFrontRegardless()
-        controller.window?.makeKeyAndOrderFront(nil)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-            self?.suppressPanelAutoClose = false
-        }
+        settingsShortcutCaptureActive = isActive
+        registerPanelHotKeyIfNeeded()
     }
 
     private var isCurrentExternalEditorCodex: Bool {
@@ -3955,6 +3843,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         NSApp.unhide(nil)
         promoteAppForExternalEditorIfNeeded()
         openFileBackedEditor(for: fileURL, kind: document.kind, initialText: document.text)
+        return true
+    }
+
+    @discardableResult
+    private func openTextDocumentForValidation(at fileURL: URL) -> Bool {
+        guard let document = readPlainTextDocument(at: fileURL) else {
+            presentPlainTextOpenFailure(for: fileURL)
+            return false
+        }
+        NSApp.unhide(nil)
+        promoteAppForExternalEditorIfNeeded()
+        openFileBackedEditor(
+            for: fileURL,
+            kind: document.kind,
+            initialText: document.text,
+            initialPreviewVisible: document.kind.supportsMarkdownPreview
+        )
         return true
     }
 
@@ -4027,7 +3932,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
                     let referenceFrame = self.panel.frame
                     let screen = self.screen(containing: referenceFrame) ?? self.panel.screen ?? window.screen ?? NSScreen.main
                     let visibleFrame = (screen?.visibleFrame ?? window.frame).insetBy(dx: Layout.screenMargin, dy: Layout.screenMargin)
-                    let desiredFrame = Self.auxiliaryWindowPlacement(
+                    let desiredFrame = WindowShellPolicy.auxiliaryWindowPlacement(
                         anchorFrame: referenceFrame,
                         visibleFrame: visibleFrame,
                         windowSize: window.frame.size,
@@ -4431,6 +4336,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         noteEditorIsPlaceholderManualNote = false
         noteEditorWindowController?.window?.orderOut(nil)
         noteEditorWindowController = nil
+        noteEditorSessionID = nil
 
         let controller = makeFileBackedEditorWindowController(
             fileURL: standardizedFileURL,
@@ -4474,7 +4380,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
                 let referenceFrame = self.panel.isVisible ? self.panel.frame : window.frame
                 let screen = self.screen(containing: referenceFrame) ?? self.panel.screen ?? window.screen ?? NSScreen.main
                 let visibleFrame = (screen?.visibleFrame ?? window.frame).insetBy(dx: Layout.screenMargin, dy: Layout.screenMargin)
-                let desiredFrame = Self.auxiliaryWindowPlacement(
+                let desiredFrame = WindowShellPolicy.auxiliaryWindowPlacement(
                     anchorFrame: referenceFrame,
                     visibleFrame: visibleFrame,
                     windowSize: window.frame.size,
@@ -4602,7 +4508,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
                     let referenceFrame = self.panel.frame
                     let screen = self.screen(containing: referenceFrame) ?? self.panel.screen ?? window.screen ?? NSScreen.main
                     let visibleFrame = (screen?.visibleFrame ?? window.frame).insetBy(dx: Layout.screenMargin, dy: Layout.screenMargin)
-                    let desiredFrame = Self.auxiliaryWindowPlacement(
+                    let desiredFrame = WindowShellPolicy.auxiliaryWindowPlacement(
                         anchorFrame: referenceFrame,
                         visibleFrame: visibleFrame,
                         windowSize: window.frame.size,
@@ -4629,6 +4535,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         for fileURL: URL,
         kind: FileBackedDocumentKind,
         initialText: String,
+        initialPreviewVisible: Bool? = nil,
         preferredFrame: NSRect? = nil
     ) {
         let standardizedURL = fileURL.standardizedFileURL
@@ -4664,7 +4571,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             let controller = self.makeFileBackedEditorWindowController(
                 fileURL: standardizedURL,
                 initialText: initialText,
-                kind: kind
+                kind: kind,
+                initialPreviewVisible: initialPreviewVisible
             )
             if let window = controller.window {
                 if let preferredFrame {
@@ -4673,7 +4581,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
                     let referenceFrame = self.panel.frame
                     let screen = self.screen(containing: referenceFrame) ?? self.panel.screen ?? window.screen ?? NSScreen.main
                     let visibleFrame = (screen?.visibleFrame ?? window.frame).insetBy(dx: Layout.screenMargin, dy: Layout.screenMargin)
-                    let desiredFrame = Self.auxiliaryWindowPlacement(
+                    let desiredFrame = WindowShellPolicy.auxiliaryWindowPlacement(
                         anchorFrame: referenceFrame,
                         visibleFrame: visibleFrame,
                         windowSize: window.frame.size,
@@ -4694,9 +4602,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     }
 
     func closeSettingsWindow() {
-        settingsWindowController?.close()
-        suppressPanelAutoClose = false
-        registerHotKeys()
+        windowShellCoordinator.closeSettingsWindow()
     }
 
     func revealLocalHistoryStorageRoot() {
@@ -4835,38 +4741,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         return alert.runModal() == .alertFirstButtonReturn
     }
 
-    private func makeSettingsWindowController() -> NSWindowController {
-        if let settingsWindowController {
-            return settingsWindowController
-        }
-
-        let rootView = SettingsView(appDelegate: self)
-            .modelContainer(sharedContainer)
-        let hostingController = NSHostingController(rootView: rootView)
-
-        let window = NSWindow(contentViewController: hostingController)
-        window.title = "Settings"
-        window.styleMask = [.titled, .closable, .miniaturizable]
-        window.setContentSize(NSSize(width: 580, height: 470))
-        window.center()
-        window.isReleasedWhenClosed = false
-        window.level = .normal
-
-        let controller = NSWindowController(window: window)
-        if settingsWindowCloseObserver == nil {
-            settingsWindowCloseObserver = NotificationCenter.default.addObserver(
-                forName: NSWindow.willCloseNotification,
-                object: window,
-                queue: .main
-            ) { [weak self] _ in
-                self?.suppressPanelAutoClose = false
-                self?.registerHotKeys()
-            }
-        }
-        settingsWindowController = controller
-        return controller
-    }
-
     private enum FloatingFeedbackStyle {
         case copy
         case joined
@@ -4989,6 +4863,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     }
 
     private func makeNoteEditorWindowController(itemID: UUID, isPlaceholderManualNote: Bool) -> NSWindowController {
+        let sessionID = EditorSessionID()
+        standaloneNoteSessionID = sessionID
         standaloneNoteItemID = itemID
         standaloneNoteIsPlaceholderManualNote = isPlaceholderManualNote
         let initialText = dataManager.loadWorkingNoteText(for: itemID)
@@ -5009,6 +4885,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             codexContext: nil,
             commitMode: .pasteToTarget,
             initialMarkdownPreviewVisible: false,
+            editorSessionID: sessionID,
+            editorCommandDispatcher: editorCommandDispatcher,
             onDraftChange: { [weak self] text in
                 self?.standaloneNoteDraftText = text
                 self?.scheduleStandaloneNoteAutosave(itemID: itemID, text: text)
@@ -5057,6 +4935,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         initialPreviewVisible: Bool? = nil,
         initialHistoryVisible: Bool = false
     ) -> NSWindowController {
+        let sessionID = EditorSessionID()
+        noteEditorSessionID = sessionID
         if !isOrphaned {
             fileLocalHistoryManager?.registerOpenedFile(fileURL.standardizedFileURL)
         }
@@ -5088,6 +4968,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             commitMode: isOrphaned ? .orphanedCodex : .returnToCodex,
             initialMarkdownPreviewVisible: resolvedInitialPreviewVisible,
             initialHistoryVisible: initialHistoryVisible,
+            editorSessionID: sessionID,
+            editorCommandDispatcher: editorCommandDispatcher,
             onDraftChange: { [weak self] text in
                 self?.noteEditorDraftText = text
             },
@@ -5143,6 +5025,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         initialPreviewVisible: Bool? = nil,
         initialHistoryVisible: Bool = false
     ) -> NSWindowController {
+        let sessionID = EditorSessionID()
+        noteEditorSessionID = sessionID
         if let fileURL {
             fileLocalHistoryManager?.registerOpenedFile(fileURL.standardizedFileURL)
         }
@@ -5178,6 +5062,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
             commitMode: kind == .markdown ? .fileBackedMarkdown : .fileBackedText,
             initialMarkdownPreviewVisible: resolvedInitialPreviewVisible,
             initialHistoryVisible: initialHistoryVisible,
+            editorSessionID: sessionID,
+            editorCommandDispatcher: editorCommandDispatcher,
             onDraftChange: { [weak self] text in
                 self?.noteEditorDraftText = text
             },
@@ -5411,6 +5297,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         externalEditorSaveStatus.lastSaveDestination = nil
         externalEditorSaveStatus.saveRevision += 1
         noteEditorWindowController = nil
+        noteEditorSessionID = nil
 
         window.contentViewController = NSViewController()
         window.orderOut(nil)
@@ -5497,6 +5384,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         standaloneNoteSaveStatus.lastSaveDestination = nil
         standaloneNoteSaveStatus.saveRevision += 1
         standaloneNoteWindowController = nil
+        standaloneNoteSessionID = nil
 
         window.contentViewController = NSViewController()
         window.orderOut(nil)
@@ -6020,7 +5908,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
     }
 
     static func panelToggleAction(isVisible: Bool, isFrontmost: Bool) -> PanelToggleAction {
-        (isVisible && isFrontmost) ? .close : .showOrRaise
+        WindowShellPolicy.panelToggleAction(isVisible: isVisible, isFrontmost: isFrontmost)
     }
 
     static func standaloneDiscardAction(
@@ -6149,88 +6037,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSWi
         registerHotKeys()
     }
     
-    @objc
-    private func statusItemButtonClicked(_ sender: NSStatusBarButton) {
-        guard let currentEvent = NSApp.currentEvent else {
-            togglePanelFromStatusItem()
-            return
-        }
-        
-        if currentEvent.type == .rightMouseUp {
-            showStatusMenu(using: currentEvent)
-            return
-        }
-        
-        togglePanelFromStatusItem()
-    }
-
     private func togglePanelFromStatusItem() {
-        if Self.panelToggleAction(isVisible: panel.isVisible, isFrontmost: isPanelFrontmost()) == .close {
-            closePanelAndReactivate()
-            return
-        }
-        showPanelFromStatusItem()
-    }
-
-    private func showPanelFromStatusItem() {
-        suppressPanelAutoClose = true
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.showPanel()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
-                self?.suppressPanelAutoClose = false
-            }
-        }
-    }
-    
-    @objc
-    private func togglePanelFromMenu() {
-        togglePanel()
-    }
-    
-    @objc
-    private func translateNowFromMenu() {
-        translateCurrentContext()
-    }
-    
-    @objc
-    private func openSettingsFromMenu() {
-        openSettingsWindow()
-    }
-
-    @objc
-    private func newMarkdownFileFromMenu() {
-        openUntitledFileBackedEditor(kind: .markdown)
-    }
-
-    @objc
-    private func newTextFileFromMenu() {
-        openUntitledFileBackedEditor(kind: .text)
-    }
-
-    @objc
-    private func createNewNoteFromMenu() {
-        createNewNoteFromAnyState()
-    }
-
-    @objc
-    private func openMarkdownFileFromMenu() {
-        openTextDocumentViaPanel(preferredKind: .markdown)
-    }
-
-    @objc
-    private func openTextFileFromMenu() {
-        openTextDocumentViaPanel(preferredKind: .text)
-    }
-
-    @objc
-    private func openFileFromMenu() {
-        openTextDocumentViaPanel()
-    }
-    
-    @objc
-    private func quitFromMenu() {
-        NSApp.terminate(nil)
+        windowShellCoordinator.togglePanelFromStatusItem()
     }
 }
 

@@ -17,6 +17,7 @@ enum EditorCommand: String {
     case moveLineDown
     case toggleMarkdownPreview
     case joinLines
+    case joinLinesWithSpaces
     case normalizeForCommand
     case trimTrailingWhitespace
     case setText
@@ -112,7 +113,9 @@ struct EventHandlingView: NSViewRepresentable {
     var redoShortcut: HotKeyManager.Shortcut
     var copyJoinedShortcut: HotKeyManager.Shortcut
     var copyNormalizedShortcut: HotKeyManager.Shortcut
+    var copyJoinedWithSpacesShortcut: HotKeyManager.Shortcut
     var joinLinesShortcut: HotKeyManager.Shortcut
+    var joinLinesWithSpacesShortcut: HotKeyManager.Shortcut
     var normalizeForCommandShortcut: HotKeyManager.Shortcut
     var onLeftArrow: () -> Void
     var onRightArrow: () -> Void
@@ -125,6 +128,7 @@ struct EventHandlingView: NSViewRepresentable {
     var onCopyCommand: () -> Void
     var onCopyJoinedCommand: () -> Void
     var onCopyNormalizedCommand: () -> Void
+    var onCopyJoinedWithSpacesCommand: () -> Void
     var onClosePanel: () -> Void
     var onDelete: () -> Void
     var onTogglePin: () -> Void
@@ -134,6 +138,7 @@ struct EventHandlingView: NSViewRepresentable {
     var onUndo: () -> Void
     var onRedo: () -> Void
     var onJoinLines: () -> Void
+    var onJoinLinesWithSpaces: () -> Void
     var onNormalizeForCommand: () -> Void
     var onToggleHelp: () -> Void
     var onOpenSettings: () -> Void
@@ -153,7 +158,9 @@ struct EventHandlingView: NSViewRepresentable {
         view.redoShortcut = redoShortcut
         view.copyJoinedShortcut = copyJoinedShortcut
         view.copyNormalizedShortcut = copyNormalizedShortcut
+        view.copyJoinedWithSpacesShortcut = copyJoinedWithSpacesShortcut
         view.joinLinesShortcut = joinLinesShortcut
+        view.joinLinesWithSpacesShortcut = joinLinesWithSpacesShortcut
         view.normalizeForCommandShortcut = normalizeForCommandShortcut
         view.onLeftArrow = onLeftArrow
         view.onRightArrow = onRightArrow
@@ -166,6 +173,7 @@ struct EventHandlingView: NSViewRepresentable {
         view.onCopyCommand = onCopyCommand
         view.onCopyJoinedCommand = onCopyJoinedCommand
         view.onCopyNormalizedCommand = onCopyNormalizedCommand
+        view.onCopyJoinedWithSpacesCommand = onCopyJoinedWithSpacesCommand
         view.onClosePanel = onClosePanel
         view.onDelete = onDelete
         view.onTogglePin = onTogglePin
@@ -175,6 +183,7 @@ struct EventHandlingView: NSViewRepresentable {
         view.onUndo = onUndo
         view.onRedo = onRedo
         view.onJoinLines = onJoinLines
+        view.onJoinLinesWithSpaces = onJoinLinesWithSpaces
         view.onNormalizeForCommand = onNormalizeForCommand
         view.onToggleHelp = onToggleHelp
         view.onOpenSettings = onOpenSettings
@@ -199,7 +208,9 @@ struct EventHandlingView: NSViewRepresentable {
         nsView.redoShortcut = redoShortcut
         nsView.copyJoinedShortcut = copyJoinedShortcut
         nsView.copyNormalizedShortcut = copyNormalizedShortcut
+        nsView.copyJoinedWithSpacesShortcut = copyJoinedWithSpacesShortcut
         nsView.joinLinesShortcut = joinLinesShortcut
+        nsView.joinLinesWithSpacesShortcut = joinLinesWithSpacesShortcut
         nsView.normalizeForCommandShortcut = normalizeForCommandShortcut
         nsView.onLeftArrow = onLeftArrow
         nsView.onRightArrow = onRightArrow
@@ -212,6 +223,7 @@ struct EventHandlingView: NSViewRepresentable {
         nsView.onCopyCommand = onCopyCommand
         nsView.onCopyJoinedCommand = onCopyJoinedCommand
         nsView.onCopyNormalizedCommand = onCopyNormalizedCommand
+        nsView.onCopyJoinedWithSpacesCommand = onCopyJoinedWithSpacesCommand
         nsView.onClosePanel = onClosePanel
         nsView.onDelete = onDelete
         nsView.onTogglePin = onTogglePin
@@ -221,6 +233,7 @@ struct EventHandlingView: NSViewRepresentable {
         nsView.onUndo = onUndo
         nsView.onRedo = onRedo
         nsView.onJoinLines = onJoinLines
+        nsView.onJoinLinesWithSpaces = onJoinLinesWithSpaces
         nsView.onNormalizeForCommand = onNormalizeForCommand
         nsView.onToggleHelp = onToggleHelp
         nsView.onOpenSettings = onOpenSettings
@@ -315,6 +328,8 @@ struct AttributedEditorPreviewTextView: NSViewRepresentable {
 
 struct EditorTextView: NSViewRepresentable {
     @Binding var text: String
+    var editorSessionID: EditorSessionID? = nil
+    var commandDispatcher: EditorCommandDispatcher? = nil
     let fontSize: CGFloat
     let commitShortcut: HotKeyManager.Shortcut
     let indentShortcut: HotKeyManager.Shortcut
@@ -323,8 +338,10 @@ struct EditorTextView: NSViewRepresentable {
     let moveLineDownShortcut: HotKeyManager.Shortcut
     let toggleMarkdownPreviewShortcut: HotKeyManager.Shortcut
     let joinLinesShortcut: HotKeyManager.Shortcut
+    let joinLinesWithSpacesShortcut: HotKeyManager.Shortcut
     let normalizeForCommandShortcut: HotKeyManager.Shortcut
     let orphanCodexDiscardShortcut: HotKeyManager.Shortcut
+    let joinLineBreakStrategy: JoinLineBreakStrategy
     let onEscape: () -> Void
     let onCommit: () -> Void
     let onSave: () -> Void
@@ -379,8 +396,12 @@ struct EditorTextView: NSViewRepresentable {
         textView.moveLineDownShortcut = moveLineDownShortcut
         textView.toggleMarkdownPreviewShortcut = toggleMarkdownPreviewShortcut
         textView.joinLinesShortcut = joinLinesShortcut
+        textView.joinLinesWithSpacesShortcut = joinLinesWithSpacesShortcut
         textView.normalizeForCommandShortcut = normalizeForCommandShortcut
         textView.orphanCodexDiscardShortcut = orphanCodexDiscardShortcut
+        textView.joinLineBreakStrategy = joinLineBreakStrategy
+        textView.editorSessionID = editorSessionID
+        textView.editorCommandDispatcher = commandDispatcher
         textView.onEscape = onEscape
         textView.onCommit = onCommit
         textView.onSave = onSave
@@ -412,8 +433,12 @@ struct EditorTextView: NSViewRepresentable {
         textView.moveLineDownShortcut = moveLineDownShortcut
         textView.toggleMarkdownPreviewShortcut = toggleMarkdownPreviewShortcut
         textView.joinLinesShortcut = joinLinesShortcut
+        textView.joinLinesWithSpacesShortcut = joinLinesWithSpacesShortcut
         textView.normalizeForCommandShortcut = normalizeForCommandShortcut
         textView.orphanCodexDiscardShortcut = orphanCodexDiscardShortcut
+        textView.joinLineBreakStrategy = joinLineBreakStrategy
+        textView.editorSessionID = editorSessionID
+        textView.editorCommandDispatcher = commandDispatcher
         textView.onEscape = onEscape
         textView.onCommit = onCommit
         textView.onSave = onSave
@@ -1488,14 +1513,36 @@ final class EditorNSTextView: NSTextView {
     var moveLineDownShortcut = AppSettings.default.moveLineDownShortcut
     var toggleMarkdownPreviewShortcut = AppSettings.default.toggleMarkdownPreviewShortcut
     var joinLinesShortcut = AppSettings.default.joinLinesShortcut
+    var joinLinesWithSpacesShortcut = AppSettings.default.joinLinesWithSpacesShortcut
     var normalizeForCommandShortcut = AppSettings.default.normalizeForCommandShortcut
     var orphanCodexDiscardShortcut = AppSettings.defaultOrphanCodexDiscardShortcut
+    var joinLineBreakStrategy = AppSettings.default.joinLineBreakStrategy
+    weak var editorCommandDispatcher: EditorCommandDispatcher? {
+        didSet {
+            refreshDispatcherRegistration()
+        }
+    }
+    var editorSessionID: EditorSessionID? {
+        didSet {
+            refreshDispatcherRegistration()
+        }
+    }
     private var editorCommandObserver: NSObjectProtocol?
+    private var dispatcherRegistrationSessionID: EditorSessionID?
+    private var dispatcherRegistrationToken: UUID?
 
     deinit {
         if let editorCommandObserver {
             NotificationCenter.default.removeObserver(editorCommandObserver)
         }
+        unregisterDispatcher()
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil {
+            unregisterDispatcher()
+        }
+        super.viewWillMove(toWindow: newWindow)
     }
 
     override func viewDidMoveToWindow() {
@@ -1517,6 +1564,7 @@ final class EditorNSTextView: NSTextView {
                 self.applyEditorCommand(command, payloadText: payloadText)
             }
         }
+        refreshDispatcherRegistration()
     }
 
     override func keyDown(with event: NSEvent) {
@@ -1547,6 +1595,11 @@ final class EditorNSTextView: NSTextView {
 
         if HotKeyManager.event(event, matches: moveLineDownShortcut) {
             applyEditorCommand(.moveLineDown)
+            return
+        }
+
+        if HotKeyManager.event(event, matches: joinLinesWithSpacesShortcut) {
+            applyEditorCommand(.joinLinesWithSpaces)
             return
         }
 
@@ -1608,6 +1661,9 @@ final class EditorNSTextView: NSTextView {
         } else if HotKeyManager.event(event, matches: joinLinesShortcut) {
             applyEditorCommand(.joinLines)
             return true
+        } else if HotKeyManager.event(event, matches: joinLinesWithSpacesShortcut) {
+            applyEditorCommand(.joinLinesWithSpaces)
+            return true
         } else if HotKeyManager.event(event, matches: normalizeForCommandShortcut) {
             applyEditorCommand(.normalizeForCommand)
             return true
@@ -1636,7 +1692,11 @@ final class EditorNSTextView: NSTextView {
             onToggleMarkdownPreview?()
         case .joinLines:
             transformSelectionOrAll(actionName: "Join Lines") { text in
-                joinLinesText(text)
+                joinLinesText(text, strategy: joinLineBreakStrategy)
+            }
+        case .joinLinesWithSpaces:
+            transformSelectionOrAll(actionName: "Join Lines With Spaces") { text in
+                joinLinesText(text, strategy: .replaceWithSpace)
             }
         case .normalizeForCommand:
             transformSelectionOrAll(actionName: "Normalize for Command") { text in
@@ -1836,6 +1896,36 @@ final class EditorNSTextView: NSTextView {
         }
     }
 
+    private func refreshDispatcherRegistration() {
+        guard window != nil,
+              let sessionID = editorSessionID,
+              let dispatcher = editorCommandDispatcher else {
+            unregisterDispatcher()
+            return
+        }
+
+        if dispatcherRegistrationSessionID == sessionID,
+           dispatcherRegistrationToken != nil {
+            return
+        }
+
+        unregisterDispatcher()
+        dispatcherRegistrationToken = dispatcher.register(sessionID: sessionID) { [weak self] command, payloadText in
+            self?.applyEditorCommand(command, payloadText: payloadText)
+        }
+        dispatcherRegistrationSessionID = sessionID
+    }
+
+    private func unregisterDispatcher() {
+        guard let sessionID = dispatcherRegistrationSessionID else {
+            dispatcherRegistrationToken = nil
+            return
+        }
+        editorCommandDispatcher?.unregister(sessionID: sessionID, token: dispatcherRegistrationToken)
+        dispatcherRegistrationSessionID = nil
+        dispatcherRegistrationToken = nil
+    }
+
     private func lineInfosIntersectingSelection(_ selection: NSRange, in text: NSString) -> [LineInfo] {
         if text.length == 0 {
             return [LineInfo(fullRange: NSRange(location: 0, length: 0), contentRange: NSRange(location: 0, length: 0), terminatorRange: NSRange(location: 0, length: 0))]
@@ -1906,15 +1996,30 @@ final class EditorNSTextView: NSTextView {
 }
 
 func normalizeCommandText(_ text: String) -> String {
-    standardizedLines(text)
-        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+    let lines = standardizedLines(text)
+    let firstNonEmptyIndent = lines
+        .first(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+        .map(leadingWhitespaceCount) ?? 0
+
+    return lines
+        .map { line in
+            let withoutTrailingWhitespace = line.replacingOccurrences(
+                of: #"[ \t]+$"#,
+                with: "",
+                options: .regularExpression
+            )
+            guard !withoutTrailingWhitespace.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return ""
+            }
+            return removingLeadingWhitespace(from: withoutTrailingWhitespace, count: firstNonEmptyIndent)
+        }
         .joined(separator: "\n")
 }
 
-func joinLinesText(_ text: String) -> String {
+func joinLinesText(_ text: String, strategy: JoinLineBreakStrategy = .removeBreaks) -> String {
     standardizedLines(text)
         .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-        .joined()
+        .joined(separator: strategy.separator)
 }
 
 private func standardizedLines(_ text: String) -> [String] {
@@ -1922,6 +2027,23 @@ private func standardizedLines(_ text: String) -> [String] {
         .replacingOccurrences(of: "\r\n", with: "\n")
         .replacingOccurrences(of: "\r", with: "\n")
         .components(separatedBy: "\n")
+}
+
+private func leadingWhitespaceCount(_ text: String) -> Int {
+    text.prefix { $0 == " " || $0 == "\t" }.count
+}
+
+private func removingLeadingWhitespace(from text: String, count: Int) -> String {
+    guard count > 0 else { return text }
+    var remaining = count
+    var index = text.startIndex
+    while remaining > 0, index < text.endIndex {
+        let character = text[index]
+        guard character == " " || character == "\t" else { break }
+        index = text.index(after: index)
+        remaining -= 1
+    }
+    return String(text[index...])
 }
 
 final class RawTextContainerView: NSView {
@@ -2017,7 +2139,9 @@ class CustomKeyView: NSView {
     var redoShortcut = AppSettings.default.redoShortcut
     var copyJoinedShortcut = AppSettings.default.copyJoinedShortcut
     var copyNormalizedShortcut = AppSettings.default.copyNormalizedShortcut
+    var copyJoinedWithSpacesShortcut = AppSettings.default.copyJoinedWithSpacesShortcut
     var joinLinesShortcut = AppSettings.default.joinLinesShortcut
+    var joinLinesWithSpacesShortcut = AppSettings.default.joinLinesWithSpacesShortcut
     var normalizeForCommandShortcut = AppSettings.default.normalizeForCommandShortcut
     var onLeftArrow: (() -> Void)?
     var onRightArrow: (() -> Void)?
@@ -2030,6 +2154,7 @@ class CustomKeyView: NSView {
     var onCopyCommand: (() -> Void)?
     var onCopyJoinedCommand: (() -> Void)?
     var onCopyNormalizedCommand: (() -> Void)?
+    var onCopyJoinedWithSpacesCommand: (() -> Void)?
     var onClosePanel: (() -> Void)?
     var onDelete: (() -> Void)?
     var onTogglePin: (() -> Void)?
@@ -2039,6 +2164,7 @@ class CustomKeyView: NSView {
     var onUndo: (() -> Void)?
     var onRedo: (() -> Void)?
     var onJoinLines: (() -> Void)?
+    var onJoinLinesWithSpaces: (() -> Void)?
     var onNormalizeForCommand: (() -> Void)?
     var onToggleHelp: (() -> Void)?
     var onOpenSettings: (() -> Void)?
@@ -2080,6 +2206,11 @@ class CustomKeyView: NSView {
 
         if HotKeyManager.event(event, matches: togglePinnedAreaShortcut) {
             onTogglePinnedArea?()
+            return true
+        }
+
+        if HotKeyManager.event(event, matches: copyJoinedWithSpacesShortcut) {
+            onCopyJoinedWithSpacesCommand?()
             return true
         }
 
@@ -2160,6 +2291,11 @@ class CustomKeyView: NSView {
 
         if HotKeyManager.event(event, matches: copyJoinedShortcut) {
             onCopyJoinedCommand?()
+            return true
+        }
+
+        if HotKeyManager.event(event, matches: copyJoinedWithSpacesShortcut) {
+            onCopyJoinedWithSpacesCommand?()
             return true
         }
 

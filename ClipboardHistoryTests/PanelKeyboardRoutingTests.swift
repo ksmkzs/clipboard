@@ -158,6 +158,24 @@ final class PanelKeyboardRoutingTests: XCTestCase {
         XCTAssertFalse(didCopyRaw)
     }
 
+    func testCopyJoinedWithSpacesShortcutCallsSpaceJoinHandlerInPanelMode() {
+        let view = CustomKeyView(frame: .init(x: 0, y: 0, width: 240, height: 120))
+        var didCopyJoinedWithSpaces = false
+        var didCopyRaw = false
+        view.copyJoinedWithSpacesShortcut = AppSettings.default.copyJoinedWithSpacesShortcut
+        view.onCopyJoinedWithSpacesCommand = {
+            didCopyJoinedWithSpaces = true
+        }
+        view.onCopyCommand = {
+            didCopyRaw = true
+        }
+
+        view.keyDown(with: keyEvent(keyCode: Int(view.copyJoinedWithSpacesShortcut.keyCode), characters: "C", modifiers: [.option, .shift]))
+
+        XCTAssertTrue(didCopyJoinedWithSpaces)
+        XCTAssertFalse(didCopyRaw)
+    }
+
     func testPlainCommandCOnlyCallsRawCopyHandler() {
         let view = CustomKeyView(frame: .init(x: 0, y: 0, width: 240, height: 120))
         var didCopyRaw = false
@@ -275,7 +293,7 @@ final class ClipboardHelpCatalogTests: XCTestCase {
         let commands = ClipboardHelpCatalog.panelHeaderCommands(settings: .default)
         let titles = Set(commands.map(\.title))
 
-        XCTAssertEqual(commands.count, 10)
+        XCTAssertEqual(commands.count, 11)
         XCTAssertTrue(titles.contains("Close"))
         XCTAssertTrue(titles.contains("Undo / Redo"))
         XCTAssertTrue(titles.contains("Paste into current window"))
@@ -285,6 +303,7 @@ final class ClipboardHelpCatalogTests: XCTestCase {
         XCTAssertTrue(titles.contains("Delete"))
         XCTAssertTrue(titles.contains("Pins"))
         XCTAssertTrue(titles.contains("One Line"))
+        XCTAssertTrue(titles.contains("One Line + Space"))
         XCTAssertTrue(titles.contains("Normalize"))
     }
 
@@ -300,6 +319,7 @@ final class ClipboardHelpCatalogTests: XCTestCase {
         XCTAssertTrue(titles.contains("Move Line"))
         XCTAssertTrue(titles.contains("Markdown Preview"))
         XCTAssertTrue(titles.contains("One Line"))
+        XCTAssertTrue(titles.contains("One Line + Space"))
         XCTAssertTrue(titles.contains("Normalize"))
     }
 
@@ -317,6 +337,7 @@ final class ClipboardHelpCatalogTests: XCTestCase {
         XCTAssertTrue(titles.contains("Show or hide pinned items"))
         XCTAssertTrue(titles.contains("Normalize the focused item"))
         XCTAssertTrue(titles.contains("Turn the focused item into one line"))
+        XCTAssertTrue(titles.contains("Join focused item with spaces"))
     }
 
     func testEditorHelpCatalogIncludesPrimaryEditorActions() {
@@ -332,15 +353,17 @@ final class ClipboardHelpCatalogTests: XCTestCase {
         XCTAssertTrue(titles.contains("Markdown preview"))
         XCTAssertTrue(titles.contains("Normalize selection whitespace"))
         XCTAssertTrue(titles.contains("Join selection into one sentence"))
+        XCTAssertTrue(titles.contains("Join selection with spaces"))
     }
 
     func testOutsideWindowHelpCatalogIncludesCopyTransformsOnly() {
         let commands = ClipboardHelpCatalog.copyCommands(settings: .default)
         let titles = Set(commands.map(\.title))
 
-        XCTAssertEqual(commands.count, 2)
+        XCTAssertEqual(commands.count, 3)
         XCTAssertTrue(titles.contains("Replace clipboard with normalized text"))
         XCTAssertTrue(titles.contains("Replace clipboard with one-line text"))
+        XCTAssertTrue(titles.contains("Replace clipboard with space-joined text"))
     }
 
     func testHelpCatalogLocalizesNormalizeByLanguage() {
@@ -395,9 +418,12 @@ final class AppSettingsStoreTests: XCTestCase {
         XCTAssertEqual(loaded.globalNewNoteShortcut, AppSettings.defaultGlobalNewNoteShortcut)
         XCTAssertEqual(loaded.globalCopyJoinedShortcut, AppSettings.defaultGlobalCopyJoinedShortcut)
         XCTAssertEqual(loaded.globalCopyNormalizedShortcut, AppSettings.defaultGlobalCopyNormalizedShortcut)
+        XCTAssertEqual(loaded.globalCopyJoinedWithSpacesShortcut, AppSettings.defaultGlobalCopyJoinedWithSpacesShortcut)
         XCTAssertEqual(loaded.orphanCodexDiscardShortcut, AppSettings.defaultOrphanCodexDiscardShortcut)
         XCTAssertTrue(loaded.globalCopyJoinedEnabled)
         XCTAssertTrue(loaded.globalCopyNormalizedEnabled)
+        XCTAssertTrue(loaded.globalCopyJoinedWithSpacesEnabled)
+        XCTAssertEqual(loaded.joinLineBreakStrategy, .removeBreaks)
         XCTAssertTrue(loaded.localFileHistoryEnabled)
         XCTAssertTrue(loaded.localFileHistoryTrackOpenedFiles)
         XCTAssertEqual(loaded.localFileHistoryWatchedExtensions, "txt,md,markdown")
@@ -426,6 +452,10 @@ final class AppSettingsStoreTests: XCTestCase {
             keyCode: UInt32(kVK_ANSI_C),
             modifiers: UInt32(cmdKey | shiftKey)
         )
+        settings.copyJoinedWithSpacesShortcut = HotKeyManager.Shortcut(
+            keyCode: UInt32(kVK_ANSI_C),
+            modifiers: UInt32(optionKey | shiftKey)
+        )
         settings.globalNewNoteShortcut = HotKeyManager.Shortcut(
             keyCode: UInt32(kVK_ANSI_N),
             modifiers: UInt32(controlKey | shiftKey)
@@ -438,12 +468,18 @@ final class AppSettingsStoreTests: XCTestCase {
             keyCode: UInt32(kVK_ANSI_C),
             modifiers: UInt32(controlKey | shiftKey)
         )
+        settings.globalCopyJoinedWithSpacesShortcut = HotKeyManager.Shortcut(
+            keyCode: UInt32(kVK_ANSI_C),
+            modifiers: UInt32(optionKey | shiftKey)
+        )
         settings.globalCopyJoinedEnabled = false
         settings.globalCopyNormalizedEnabled = false
+        settings.globalCopyJoinedWithSpacesEnabled = false
         settings.orphanCodexDiscardShortcut = HotKeyManager.Shortcut(
             keyCode: UInt32(kVK_ANSI_Backslash),
             modifiers: UInt32(cmdKey | shiftKey)
         )
+        settings.joinLineBreakStrategy = .replaceWithSpace
         settings.localFileHistoryEnabled = true
         settings.localFileHistoryTrackOpenedFiles = false
         settings.localFileHistoryWatchedDirectoryPath = "/tmp/watched"
@@ -457,12 +493,16 @@ final class AppSettingsStoreTests: XCTestCase {
         XCTAssertEqual(loaded.normalizeForCommandShortcut, settings.normalizeForCommandShortcut)
         XCTAssertEqual(loaded.copyJoinedShortcut, settings.copyJoinedShortcut)
         XCTAssertEqual(loaded.copyNormalizedShortcut, settings.copyNormalizedShortcut)
+        XCTAssertEqual(loaded.copyJoinedWithSpacesShortcut, settings.copyJoinedWithSpacesShortcut)
         XCTAssertEqual(loaded.globalNewNoteShortcut, settings.globalNewNoteShortcut)
         XCTAssertEqual(loaded.globalCopyJoinedShortcut, settings.globalCopyJoinedShortcut)
         XCTAssertEqual(loaded.globalCopyNormalizedShortcut, settings.globalCopyNormalizedShortcut)
+        XCTAssertEqual(loaded.globalCopyJoinedWithSpacesShortcut, settings.globalCopyJoinedWithSpacesShortcut)
         XCTAssertEqual(loaded.orphanCodexDiscardShortcut, settings.orphanCodexDiscardShortcut)
+        XCTAssertEqual(loaded.joinLineBreakStrategy, .replaceWithSpace)
         XCTAssertFalse(loaded.globalCopyJoinedEnabled)
         XCTAssertFalse(loaded.globalCopyNormalizedEnabled)
+        XCTAssertFalse(loaded.globalCopyJoinedWithSpacesEnabled)
         XCTAssertTrue(loaded.localFileHistoryEnabled)
         XCTAssertFalse(loaded.localFileHistoryTrackOpenedFiles)
         XCTAssertEqual(loaded.localFileHistoryWatchedDirectoryPath, "/tmp/watched")
@@ -485,10 +525,12 @@ final class AppSettingsStoreTests: XCTestCase {
         XCTAssertEqual(loaded.globalNewNoteShortcut, AppSettings.defaultGlobalNewNoteShortcut)
         XCTAssertEqual(loaded.globalCopyJoinedShortcut, AppSettings.defaultGlobalCopyJoinedShortcut)
         XCTAssertEqual(loaded.globalCopyNormalizedShortcut, AppSettings.defaultGlobalCopyNormalizedShortcut)
+        XCTAssertEqual(loaded.globalCopyJoinedWithSpacesShortcut, AppSettings.defaultGlobalCopyJoinedWithSpacesShortcut)
         XCTAssertEqual(loaded.orphanCodexDiscardShortcut, AppSettings.defaultOrphanCodexDiscardShortcut)
         XCTAssertTrue(loaded.globalCopyJoinedEnabled)
         XCTAssertTrue(loaded.globalCopyNormalizedEnabled)
-        XCTAssertEqual(defaults.integer(forKey: "app.settings.migrationVersion"), 10)
+        XCTAssertTrue(loaded.globalCopyJoinedWithSpacesEnabled)
+        XCTAssertEqual(defaults.integer(forKey: "app.settings.migrationVersion"), 11)
 
         defaults.removePersistentDomain(forName: suiteName)
     }

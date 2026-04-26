@@ -185,7 +185,9 @@ struct ClipboardHistoryView: View {
             redoShortcut: appDelegate.settings.redoShortcut,
             copyJoinedShortcut: appDelegate.settings.copyJoinedShortcut,
             copyNormalizedShortcut: appDelegate.settings.copyNormalizedShortcut,
+            copyJoinedWithSpacesShortcut: appDelegate.settings.copyJoinedWithSpacesShortcut,
             joinLinesShortcut: appDelegate.settings.joinLinesShortcut,
+            joinLinesWithSpacesShortcut: appDelegate.settings.joinLinesWithSpacesShortcut,
             normalizeForCommandShortcut: appDelegate.settings.normalizeForCommandShortcut,
             onLeftArrow: { moveSelectionHorizontally(to: .history) },
             onRightArrow: { moveSelectionHorizontally(to: .pinned) },
@@ -198,6 +200,7 @@ struct ClipboardHistoryView: View {
             onCopyCommand: { copySelectedItem() },
             onCopyJoinedCommand: { joinSelectedItemLines() },
             onCopyNormalizedCommand: { normalizeSelectedItemForCommand() },
+            onCopyJoinedWithSpacesCommand: { joinSelectedItemLinesWithSpaces() },
             onClosePanel: { handleEscapeAction() },
             onDelete: { deleteSelectedItem() },
             onTogglePin: { togglePinnedForSelectedItem() },
@@ -207,6 +210,7 @@ struct ClipboardHistoryView: View {
             onUndo: { undoLastOperation() },
             onRedo: { redoLastOperation() },
             onJoinLines: { joinSelectedItemLines() },
+            onJoinLinesWithSpaces: { joinSelectedItemLinesWithSpaces() },
             onNormalizeForCommand: { normalizeSelectedItemForCommand() },
             onToggleHelp: { toggleHelpOverlay() },
             onOpenSettings: onOpenSettings,
@@ -314,23 +318,40 @@ struct ClipboardHistoryView: View {
 
     private func handleClipboardTransformRequested(_ notification: Notification) {
         guard let action = notification.userInfo?["action"] as? String else { return }
+        var editorCommandUserInfo: [String: Any] = [:]
+        if let targetWindowNumber = NSApp.keyWindow?.windowNumber {
+            editorCommandUserInfo["targetWindowNumber"] = targetWindowNumber
+        }
         switch action {
         case "join":
             if editingItemID != nil {
+                editorCommandUserInfo["command"] = EditorCommand.joinLines.rawValue
                 NotificationCenter.default.post(
                     name: .editorCommandRequested,
                     object: nil,
-                    userInfo: ["command": EditorCommand.joinLines.rawValue]
+                    userInfo: editorCommandUserInfo
                 )
             } else {
                 joinSelectedItemLines()
             }
-        case "normalize":
+        case "joinWithSpaces":
             if editingItemID != nil {
+                editorCommandUserInfo["command"] = EditorCommand.joinLinesWithSpaces.rawValue
                 NotificationCenter.default.post(
                     name: .editorCommandRequested,
                     object: nil,
-                    userInfo: ["command": EditorCommand.normalizeForCommand.rawValue]
+                    userInfo: editorCommandUserInfo
+                )
+            } else {
+                joinSelectedItemLinesWithSpaces()
+            }
+        case "normalize":
+            if editingItemID != nil {
+                editorCommandUserInfo["command"] = EditorCommand.normalizeForCommand.rawValue
+                NotificationCenter.default.post(
+                    name: .editorCommandRequested,
+                    object: nil,
+                    userInfo: editorCommandUserInfo
                 )
             } else {
                 normalizeSelectedItemForCommand()
@@ -918,7 +939,13 @@ struct ClipboardHistoryView: View {
 
     private func copyJoinedSelectedItem() {
         copyTransformedSelectedText(actionName: "Joined") { text in
-            joinLinesText(text)
+            joinLinesText(text, strategy: appDelegate.settings.joinLineBreakStrategy)
+        }
+    }
+
+    private func copyJoinedWithSpacesSelectedItem() {
+        copyTransformedSelectedText(actionName: "Joined with spaces") { text in
+            joinLinesText(text, strategy: .replaceWithSpace)
         }
     }
 
@@ -1123,7 +1150,13 @@ struct ClipboardHistoryView: View {
 
     private func joinSelectedItemLines() {
         applyTextTransformToSelectedItem(actionName: "Joined") { text in
-            joinLinesText(text)
+            joinLinesText(text, strategy: appDelegate.settings.joinLineBreakStrategy)
+        }
+    }
+
+    private func joinSelectedItemLinesWithSpaces() {
+        applyTextTransformToSelectedItem(actionName: "Joined with spaces") { text in
+            joinLinesText(text, strategy: .replaceWithSpace)
         }
     }
 
@@ -1324,6 +1357,11 @@ private struct ClipboardHeaderSection: View {
                 key: HotKeyManager.displayString(for: settings.joinLinesShortcut)
             )
             shortcutHint(
+                icon: "link.badge.plus",
+                label: t("One Line + Space", "一文化+空白"),
+                key: HotKeyManager.displayString(for: settings.joinLinesWithSpacesShortcut)
+            )
+            shortcutHint(
                 icon: "terminal",
                 label: t("Normalize", "整形"),
                 key: HotKeyManager.displayString(for: settings.normalizeForCommandShortcut)
@@ -1351,6 +1389,7 @@ private struct ClipboardHeaderSection: View {
             shortcutHint(icon: "sidebar.right", label: t("Pins", "ピン表示"), key: "Tab")
             shortcutHint(icon: "terminal", label: t("Normalize", "整形"), key: HotKeyManager.displayString(for: settings.copyNormalizedShortcut))
             shortcutHint(icon: "link", label: t("One Line", "一文化"), key: HotKeyManager.displayString(for: settings.copyJoinedShortcut))
+            shortcutHint(icon: "link.badge.plus", label: t("One Line + Space", "一文化+空白"), key: HotKeyManager.displayString(for: settings.copyJoinedWithSpacesShortcut))
         }
     }
 
@@ -1432,7 +1471,8 @@ enum ClipboardHelpCatalog {
             .init(title: t("Delete", "削除", language: settings.settingsLanguage), shortcut: "⌫", symbolName: "delete.left.circle"),
             .init(title: t("Pins", "ピン表示", language: settings.settingsLanguage), shortcut: "Tab", symbolName: "sidebar.right"),
             .init(title: t("Normalize", "整形", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.copyNormalizedShortcut), symbolName: "terminal"),
-            .init(title: t("One Line", "一文化", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.copyJoinedShortcut), symbolName: "link.circle")
+            .init(title: t("One Line", "一文化", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.copyJoinedShortcut), symbolName: "link.circle"),
+            .init(title: t("One Line + Space", "一文化+空白", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.copyJoinedWithSpacesShortcut), symbolName: "link.badge.plus")
         ]
     }
 
@@ -1446,7 +1486,8 @@ enum ClipboardHelpCatalog {
             .init(title: t("Move Line", "行移動", language: settings.settingsLanguage), shortcut: "\(HotKeyManager.displayString(for: settings.moveLineUpShortcut)) / \(HotKeyManager.displayString(for: settings.moveLineDownShortcut))", symbolName: "arrow.up.arrow.down.circle"),
             .init(title: t("Markdown Preview", "Markdown プレビュー", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.toggleMarkdownPreviewShortcut), symbolName: "doc.richtext"),
             .init(title: t("Normalize", "整形", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.normalizeForCommandShortcut), symbolName: "terminal"),
-            .init(title: t("One Line", "一文化", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.joinLinesShortcut), symbolName: "link.circle")
+            .init(title: t("One Line", "一文化", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.joinLinesShortcut), symbolName: "link.circle"),
+            .init(title: t("One Line + Space", "一文化+空白", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.joinLinesWithSpacesShortcut), symbolName: "link.badge.plus")
         ]
     }
 
@@ -1461,7 +1502,8 @@ enum ClipboardHelpCatalog {
             .init(title: t("Delete selected item", "選択中の項目を削除", language: settings.settingsLanguage), shortcut: "⌫", symbolName: "delete.left.circle"),
             .init(title: t("Show or hide pinned items", "ピン留めした項目の表示 / 非表示", language: settings.settingsLanguage), shortcut: "Tab", symbolName: "sidebar.right"),
             .init(title: t("Normalize the focused item", "フォーカス中の項目を整形", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.copyNormalizedShortcut), symbolName: "terminal"),
-            .init(title: t("Turn the focused item into one line", "フォーカス中の項目を一文化", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.copyJoinedShortcut), symbolName: "link.circle")
+            .init(title: t("Turn the focused item into one line", "フォーカス中の項目を一文化", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.copyJoinedShortcut), symbolName: "link.circle"),
+            .init(title: t("Join focused item with spaces", "フォーカス中の項目を空白区切りで一文化", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.copyJoinedWithSpacesShortcut), symbolName: "link.badge.plus")
         ]
         return commands
     }
@@ -1476,7 +1518,8 @@ enum ClipboardHelpCatalog {
             .init(title: t("Move line up / down", "行単位で移動", language: settings.settingsLanguage), shortcut: "\(HotKeyManager.displayString(for: settings.moveLineUpShortcut)) / \(HotKeyManager.displayString(for: settings.moveLineDownShortcut))", symbolName: "arrow.up.arrow.down.circle"),
             .init(title: t("Markdown preview", "Markdown プレビュー", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.toggleMarkdownPreviewShortcut), symbolName: "doc.richtext"),
             .init(title: t("Normalize selection whitespace", "選択中の項目の空白を整形", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.normalizeForCommandShortcut), symbolName: "terminal"),
-            .init(title: t("Join selection into one sentence", "選択中の項目を一文に整形", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.joinLinesShortcut), symbolName: "link.circle")
+            .init(title: t("Join selection into one sentence", "選択中の項目を一文に整形", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.joinLinesShortcut), symbolName: "link.circle"),
+            .init(title: t("Join selection with spaces", "選択中の項目を空白区切りで一文化", language: settings.settingsLanguage), shortcut: HotKeyManager.displayString(for: settings.joinLinesWithSpacesShortcut), symbolName: "link.badge.plus")
         ]
         return commands
     }
@@ -1492,6 +1535,11 @@ enum ClipboardHelpCatalog {
                 title: t("Replace clipboard with one-line text", "クリップボード内容を一文化して上書き", language: settings.settingsLanguage),
                 shortcut: displayString(for: settings.globalCopyJoinedShortcut, enabled: settings.globalCopyJoinedEnabled, language: settings.settingsLanguage),
                 symbolName: "link.circle"
+            ),
+            .init(
+                title: t("Replace clipboard with space-joined text", "クリップボード内容を空白区切りで一文化して上書き", language: settings.settingsLanguage),
+                shortcut: displayString(for: settings.globalCopyJoinedWithSpacesShortcut, enabled: settings.globalCopyJoinedWithSpacesEnabled, language: settings.settingsLanguage),
+                symbolName: "link.badge.plus"
             )
         ]
     }
@@ -1712,6 +1760,8 @@ struct StandaloneNoteEditorView: View {
     let commitMode: CommitMode
     let initialMarkdownPreviewVisible: Bool
     let initialHistoryVisible: Bool
+    let editorSessionID: EditorSessionID?
+    let editorCommandDispatcher: EditorCommandDispatcher?
     let onDraftChange: (String) -> Void
     let onCommit: (String) -> Void
     let onSave: () -> Void
@@ -1729,6 +1779,8 @@ struct StandaloneNoteEditorView: View {
         commitMode: CommitMode,
         initialMarkdownPreviewVisible: Bool,
         initialHistoryVisible: Bool = false,
+        editorSessionID: EditorSessionID? = nil,
+        editorCommandDispatcher: EditorCommandDispatcher? = nil,
         onDraftChange: @escaping (String) -> Void,
         onCommit: @escaping (String) -> Void,
         onSave: @escaping () -> Void,
@@ -1745,6 +1797,8 @@ struct StandaloneNoteEditorView: View {
         self.commitMode = commitMode
         self.initialMarkdownPreviewVisible = initialMarkdownPreviewVisible
         self.initialHistoryVisible = initialHistoryVisible
+        self.editorSessionID = editorSessionID
+        self.editorCommandDispatcher = editorCommandDispatcher
         self.onDraftChange = onDraftChange
         self.onCommit = onCommit
         self.onSave = onSave
@@ -2303,6 +2357,14 @@ struct StandaloneNoteEditorView: View {
                 primaryTextColor: theme.primaryText,
                 secondaryTextColor: theme.secondaryText
             )
+            ShortcutHintView(
+                icon: "link.badge.plus",
+                label: t("One Line + Space", "一文化+空白"),
+                key: HotKeyManager.displayString(for: appDelegate.settings.joinLinesWithSpacesShortcut),
+                zoomScale: zoomScale,
+                primaryTextColor: theme.primaryText,
+                secondaryTextColor: theme.secondaryText
+            )
         }
     }
 
@@ -2523,6 +2585,8 @@ struct StandaloneNoteEditorView: View {
             HStack(alignment: .top, spacing: 10) {
                 EditorTextView(
                     text: $draftText,
+                    editorSessionID: editorSessionID,
+                    commandDispatcher: editorCommandDispatcher,
                     fontSize: scaled(12),
                     commitShortcut: appDelegate.settings.commitEditShortcut,
                     indentShortcut: appDelegate.settings.indentShortcut,
@@ -2531,8 +2595,10 @@ struct StandaloneNoteEditorView: View {
                     moveLineDownShortcut: appDelegate.settings.moveLineDownShortcut,
                     toggleMarkdownPreviewShortcut: appDelegate.settings.toggleMarkdownPreviewShortcut,
                     joinLinesShortcut: appDelegate.settings.joinLinesShortcut,
+                    joinLinesWithSpacesShortcut: appDelegate.settings.joinLinesWithSpacesShortcut,
                     normalizeForCommandShortcut: appDelegate.settings.normalizeForCommandShortcut,
                     orphanCodexDiscardShortcut: appDelegate.settings.orphanCodexDiscardShortcut,
+                    joinLineBreakStrategy: appDelegate.settings.joinLineBreakStrategy,
                     onEscape: cancelAndClose,
                     onCommit: commitDraft,
                     onSave: onSave,
@@ -3640,7 +3706,9 @@ private struct HistoryListSection: View {
                                     moveLineDownShortcut: settings.moveLineDownShortcut,
                                     toggleMarkdownPreviewShortcut: settings.toggleMarkdownPreviewShortcut,
                                     joinLinesShortcut: settings.joinLinesShortcut,
+                                    joinLinesWithSpacesShortcut: settings.joinLinesWithSpacesShortcut,
                                     normalizeForCommandShortcut: settings.normalizeForCommandShortcut,
+                                    joinLineBreakStrategy: settings.joinLineBreakStrategy,
                                     editorText: Binding(
                                         get: { editingItemID == item.id ? editorDraftText : (item.textContent ?? "") },
                                         set: { editorDraftText = $0 }
@@ -3814,7 +3882,9 @@ private struct PinnedSidebarSection: View {
                 moveLineDownShortcut: settings.moveLineDownShortcut,
                 toggleMarkdownPreviewShortcut: settings.toggleMarkdownPreviewShortcut,
                 joinLinesShortcut: settings.joinLinesShortcut,
+                joinLinesWithSpacesShortcut: settings.joinLinesWithSpacesShortcut,
                 normalizeForCommandShortcut: settings.normalizeForCommandShortcut,
+                joinLineBreakStrategy: settings.joinLineBreakStrategy,
                 editorText: Binding(
                     get: { editingItemID == item.id ? editorDraftText : (item.textContent ?? "") },
                     set: { editorDraftText = $0 }

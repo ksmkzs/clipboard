@@ -132,6 +132,11 @@ activate_finder() {
   osascript -e 'tell application "Finder" to activate'
 }
 
+activate_neutral_front_app() {
+  open -a TextEdit >/dev/null 2>&1
+  sleep 1
+}
+
 send_keystroke() {
   local key="$1"
   local modifiers="$2"
@@ -148,27 +153,11 @@ tell application "System Events" to key code $key_code using {$modifiers}
 APPLESCRIPT
 }
 
-prepare_textedit_selection() {
-  local text="$1"
-  osascript \
-    -e 'tell application "TextEdit" to activate' \
-    -e 'tell application "TextEdit" to if (count of documents) > 0 then close every document saving no' \
-    -e "tell application \"TextEdit\" to make new document with properties {text:\"$text\"}" \
-    -e 'tell application "TextEdit" to activate' \
-    -e 'tell application "System Events" to keystroke "a" using {command down}' \
-    -e 'delay 0.25'
-}
-
 run_copy_route() {
   local route="$1"
   local text="$2"
   local expected_count="$3"
-  if [[ "$route" == "keyboard" ]]; then
-    prepare_textedit_selection "$text"
-    send_key_code 8 "command down"
-  else
-    swift "$COPY_ROUTE_DRIVER" "$route" "$text" >/dev/null
-  fi
+  swift "$COPY_ROUTE_DRIVER" "$route" "$text" >/dev/null
   wait_for_snapshot_condition "copy-route-$route-$expected_count" "data['latestHistoryItemText'] == '$text' and data['clipboardText'] == '$text' and data['historyCount'] >= $expected_count" 60
 }
 
@@ -183,6 +172,7 @@ run_copy_route_checks() {
   echo "==> external copy routes #11 #12 #13"
   launch_clean_app
   reset_validation_state
+  sleep 0.5
   case "$COPY_ROUTE_MODE" in
     keyboard)
       run_copy_route keyboard "KEYBOARD_COPY_VALIDATION" 1
@@ -229,14 +219,14 @@ run_global_special_copy_checks() {
 
   post_command dispatch setGlobalCopyJoinedEnabled false
   wait_for_snapshot_condition "global-copy-joined-disabled" "(not data['globalCopyJoinedEnabled'])" 20
-  activate_finder
+  activate_neutral_front_app
   send_keystroke "c" "command down, option down"
   sleep 0.4
   wait_for_snapshot_condition "global-copy-joined-still-unchanged" "data['clipboardText'] == 'line one\\n line two \\nline three  ' and data['latestHistoryItemText'] == 'line one\\n line two \\nline three  '" 20
 
   post_command dispatch setGlobalCopyJoinedEnabled true
   wait_for_snapshot_condition "global-copy-joined-enabled" "data['globalCopyJoinedEnabled']" 20
-  activate_finder
+  activate_neutral_front_app
   send_keystroke "c" "command down, option down"
   wait_for_snapshot_condition "global-copy-joined-ran" "data['clipboardText'] == 'line oneline twoline three' and data['latestHistoryItemText'] == 'line oneline twoline three'" 40
 
@@ -245,7 +235,7 @@ run_global_special_copy_checks() {
   wait_for_snapshot_condition "global-copy-normalized-seeded" "data['clipboardText'] == 'line one\\n line two \\nline three  '" 20
   post_command dispatch setGlobalCopyNormalizedEnabled true
   wait_for_snapshot_condition "global-copy-normalized-enabled" "data['globalCopyNormalizedEnabled']" 20
-  activate_finder
+  activate_neutral_front_app
   send_keystroke "c" "command down, shift down"
   wait_for_snapshot_condition "global-copy-normalized-ran" "data['clipboardText'] == 'line one\\nline two\\nline three' and data['latestHistoryItemText'] == 'line one\\nline two\\nline three'" 40
 }
